@@ -1,13 +1,16 @@
 /* Hub Comex — app de Ventas para registrar despachos y traslados con fotos y generar su informe en Word.
  *
  * Modos (config.js → modo):
- *   'firebase'  : registros y fotos en Firebase (Firestore), sincronizados entre dispositivos y cuentas. Provisional.
- *   'microsoft' : ingreso con Microsoft y todo en OneDrive (a futuro, SharePoint).
+ *   'sharepoint': ingreso con Microsoft; fotos en una biblioteca de SharePoint y registros en una lista. El definitivo.
+ *   'firebase'  : registros y fotos en Firebase (Firestore), sincronizados entre dispositivos y cuentas. Provisional, ya no se usa.
+ *   'microsoft' : ingreso con Microsoft y todo en el OneDrive de cada cuenta.
  *   'prueba'    : sin nube; todo queda en el dispositivo.
- * - Ingreso: Firebase (correo y contraseña), Microsoft (MSAL) o modo prueba (se elige Ventas / Soporte). La sesión queda guardada.
- * - Fotos: OneDrive → /<carpetaRaiz>/<Despachos|Traslados>/<AAAA-MM-DD - nombre>/Foto_001.jpg
+ * - Ingreso: Microsoft (MSAL), Firebase o modo prueba (se elige Ventas / Soporte). La sesión queda guardada.
+ * - Fotos: biblioteca (u OneDrive) → [<carpetaRaiz>/]<Despachos|Traslados>/<AAAA-MM-DD - nombre>/Foto_001.jpg
+ *   En SharePoint se usan las mismas llamadas de Graph que con OneDrive; graph() cambia /me/drive por la biblioteca.
  * - Cola de subida: IndexedDB. Si no hay señal, las fotos esperan en el celular.
- * - Registro: /<carpetaRaiz>/_registro-hub-comex.json (despachos y traslados, cada uno con su tipo).
+ * - Registro: SharePoint → lista (una fila por despacho o traslado, con los datos completos en la columna Datos).
+ *   OneDrive → /<carpetaRaiz>/_registro-hub-comex.json (despachos y traslados, cada uno con su tipo).
  * - Datos e inspección: se guardan primero en el dispositivo y se sincronizan cuando hay señal.
  * - Informe: informe.js arma el .docx con la librería "docx" (se carga solo al descargar el primer informe).
  */
@@ -17,16 +20,19 @@
   const CFG = window.HUB_CONFIG || {};
   const SCOPES = CFG.permisos || ['User.Read', 'Files.ReadWrite'];
   const GRAPH = 'https://graph.microsoft.com/v1.0';
-  const RAIZ = CFG.carpetaRaiz || 'Hub Comex';
+  const RAIZ = CFG.carpetaRaiz ?? 'Hub Comex'; // '' = Despachos y Traslados directo en la raíz de la biblioteca
   const REGISTRO = `/me/drive/root:/${encodeURIComponent(RAIZ)}/_registro-hub-comex.json`;
   const DOCX_URL = 'https://cdn.jsdelivr.net/npm/docx@9.5.1/dist/index.iife.js';
   const LIMITE_SIMPLE = 4 * 1024 * 1024; // Graph acepta PUT directo hasta 4 MB
   const ES_FOTO = /\.(jpe?g|png|heic|heif|webp)$/i;
   // Modo prueba (config modo: 'prueba', o …/#demo): sin nube. Se elige Ventas o Soporte al ingresar
   // y los registros y fotos se guardan solo en este dispositivo.
-  const DEMO = !['microsoft', 'firebase'].includes(CFG.modo) || location.hash === '#demo' || window.HUB_DEMO === true;
+  const DEMO = !['microsoft', 'firebase', 'sharepoint'].includes(CFG.modo) || location.hash === '#demo' || window.HUB_DEMO === true;
   const FB = !DEMO && CFG.modo === 'firebase';
+  const SP = !DEMO && CFG.modo === 'sharepoint';
   const SIN_ONEDRIVE = DEMO || FB; // sin carpetas de OneDrive: se ocultan los botones y rutas de carpeta
+  const NUBE = SP ? 'SharePoint' : 'OneDrive'; // dónde quedan las carpetas, para los textos
+  const RUTA_NUBE = (SP ? [(CFG.sharepoint || {}).nombreBiblioteca || 'Hub Comex', RAIZ] : ['OneDrive', RAIZ]).filter(Boolean).join(' › ');
   // Con cuentas (firebaseCuentas: true) se ingresa con correo y contraseña. Sin cuentas, se elige Ventas o Soporte
   // y la app se identifica ante Firebase de forma anónima (invisible), para que la base solo acepte conexiones de la app.
   const FB_CUENTAS = FB && CFG.firebaseCuentas === true;
@@ -180,18 +186,23 @@
       auth: {
         clientId: CFG.clientId,
         authority: 'https://login.microsoftonline.com/' + CFG.tenantId,
-        redirectUri: location.origin + location.pathname,
+        redirectUri: URL_APP,
         navigateToLoginRequestUrl: false
       },
       cache: { cacheLocation: 'localStorage' }
     });
     await pca.initialize();
     const r = await pca.handleRedirectPromise();
-    cuenta = (r && r.account) || pca.getActiveAccount() || pca.getAllAccounts()[0] || null;
+    // Solo cuentas de la empresa: el localStorage se comparte con los otros hubs de sisgeshealthy.github.io.
+    const propias = pca.getAllAccounts().filter(a => a.tenantId === CFG.tenantId);
+    cuenta = (r && r.account) || pca.getActiveAccount() || propias[0] || null;
     if (cuenta) pca.setActiveAccount(cuenta);
   }
+  // Siempre la carpeta, sin "index.html": instalada, la app abre como …/hub-comex/index.html
+  // y en Azure solo está registrada …/hub-comex/ (error AADSTS50011).
+  const URL_APP = location.origin + location.pathname.replace(/index\.html$/, '');
   const ingresar = () => pca.loginRedirect({ scopes: SCOPES, prompt: 'select_account' });
-  const salir = () => pca.logoutRedirect({ account: cuenta, postLogoutRedirectUri: location.origin + location.pathname });
+  const salir = () => pca.logoutRedirect({ account: cuenta, postLogoutRedirectUri: URL_APP });
 
   async function token() {
     if (DEMO) return 'demo';
@@ -199,7 +210,12 @@
       return (await pca.acquireTokenSilent({ scopes: SCOPES, account: cuenta })).accessToken;
     } catch (e) {
       if (e instanceof msal.InteractionRequiredAuthError) {
-        await pca.acquireTokenRedirect({ scopes: SCOPES, account: cuenta });
+        // Pasa la primera vez que se abre (o si la cuenta vino de otro hub). Se evita un ciclo de redirecciones
+        // si Microsoft vuelve sin el permiso (p. ej. aún no aprobado por el administrador).
+        let ultimo = 0;
+        try { ultimo = Number(sessionStorage.getItem('hc.redir') || 0); sessionStorage.setItem('hc.redir', String(Date.now())); } catch (_) {}
+        if (Date.now() - ultimo < 60000) { const err = new Error('Sin permiso de Microsoft'); err.permiso = true; throw err; }
+        await pca.acquireTokenRedirect({ scopes: SCOPES, account: cuenta, loginHint: cuenta && cuenta.username });
         return new Promise(() => {}); // la página se va al login de Microsoft
       }
       if (!navigator.onLine || /network|timeout|fetch/i.test(`${e.errorCode} ${e.message}`)) throw new SinSenal();
@@ -210,6 +226,7 @@
   async function graph(ruta, op = {}) {
     if (DEMO) return demoGraph(ruta, op);
     if (FB) return fbGraph(ruta, op);
+    if (SP && ruta.startsWith('/me/drive')) ruta = `/drives/${(await spResolver()).drive}${ruta.slice('/me/drive'.length)}`;
     const t = await token();
     const headers = { Authorization: 'Bearer ' + t, ...(op.headers || {}) };
     let body = op.body;
@@ -225,6 +242,91 @@
     }
     if (r.status === 204) return null;
     return op.raw ? r : r.json();
+  }
+
+  // ---------- SharePoint: biblioteca de fotos + lista de registros ----------
+  // Los ids del sitio, la biblioteca y la lista se buscan una vez y quedan guardados en el dispositivo.
+  // La biblioteca y la lista se ubican por su dirección (lo que va en la URL), no por el título visible.
+  const SPC = CFG.sharepoint || {};
+  let spIds = null;
+  const itemDe = new Map(); // id del registro (= id de su carpeta) → id de su fila en la lista
+  async function spResolver() {
+    if (spIds) return spIds;
+    const clave = [SPC.sitio, SPC.biblioteca, SPC.lista].join('|');
+    const guardado = cache.leer('sp.ids');
+    if (guardado && guardado.clave === clave) return (spIds = guardado);
+    const sitio = (await graph(`/sites/${SPC.sitio}?$select=id`)).id;
+    const drives = (await graph(`/sites/${sitio}/drives?$select=id,name,webUrl`)).value;
+    const drive = drives.find(x => decodeURIComponent(x.webUrl || '').replace(/\/$/, '').endsWith('/' + SPC.biblioteca));
+    const listas = (await graph(`/sites/${sitio}/lists?$select=id,name,displayName`)).value;
+    const lista = listas.find(x => x.name === SPC.lista);
+    if (!drive || !lista) {
+      const e = new Error(`No se encontró ${!drive ? 'la biblioteca ' + SPC.biblioteca : 'la lista ' + SPC.lista} en SharePoint`);
+      e.config = true;
+      throw e;
+    }
+    spIds = { clave, sitio, drive: drive.id, lista: lista.id };
+    cache.guardar('sp.ids', spIds);
+    return spIds;
+  }
+  const spItems = async () => { const x = await spResolver(); return `/sites/${x.sitio}/lists/${x.lista}/items`; };
+  // Columnas de la lista: para ver, filtrar y exportar desde SharePoint. La app solo lee "Datos" (el registro completo).
+  const spColumnas = d => ({
+    Title: d.nombre, RegistroId: d.id, Tipo: T(d).Uno, Estado: d.estado === 'proceso' ? 'En proceso' : 'Cerrado',
+    Fecha: d.fecha, Cliente: d.cliente || '', Destino: d.destino || '', Pedido: d.pedido || '', Factura: d.factura || '',
+    Contenedor: d.contenedor || '', Fotos: d.fotos || 0, Carpeta: d.webUrl || '',
+    CreadoPor: d.creadoPor || '', CerradoPor: d.estado === 'cerrado' ? d.cerradoPor || '' : '',
+    Cerrado: d.estado === 'cerrado' && d.cerrado ? d.cerrado : null,
+    ModificadoPor: d.modificadoPor || '', Datos: JSON.stringify(d)
+  });
+  async function spLeerRegistros() {
+    let ruta = `${await spItems()}?$expand=fields($select=Datos)&$select=id&$top=500`;
+    const despachos = [], items = new Map();
+    while (ruta) {
+      const r = await graph(ruta);
+      for (const it of r.value) {
+        let d = null;
+        try { d = JSON.parse(it.fields.Datos || 'null'); } catch (_) {}
+        if (!d || !d.id) continue; // fila hecha a mano en SharePoint: la app no la toca
+        items.set(d.id, it.id);
+        despachos.push(d);
+      }
+      ruta = r['@odata.nextLink'] ? r['@odata.nextLink'].replace(GRAPH, '') : null;
+    }
+    itemDe.clear();
+    items.forEach((v, k) => itemDe.set(k, v));
+    return { despachos };
+  }
+  // Guarda solo los registros que cambiaron (con quién y cuándo), una fila por registro.
+  async function spGuardarCambios(antes, data) {
+    const base = await spItems();
+    const previo = new Map(antes.despachos.map(x => [x.id, JSON.stringify(x)]));
+    const ahora = new Date().toISOString();
+    for (const x of data.despachos) {
+      const igual = previo.get(x.id) === JSON.stringify(x);
+      previo.delete(x.id);
+      if (igual) continue;
+      x.modificado = ahora; x.modificadoPor = cuenta.username;
+      const item = itemDe.get(x.id);
+      if (item) await graph(`${base}/${item}/fields`, { method: 'PATCH', json: spColumnas(x) });
+      else itemDe.set(x.id, (await graph(base, { method: 'POST', json: { fields: spColumnas(x) } })).id);
+    }
+    for (const id of previo.keys()) {
+      const item = itemDe.get(id);
+      if (!item) continue;
+      try { await graph(`${base}/${item}`, { method: 'DELETE' }); }
+      catch (e) { if (e.status !== 404) throw e; }
+      itemDe.delete(id);
+    }
+  }
+  // Sin tiempo real en SharePoint: se vuelve a leer la lista cada 30 s y al volver a la app.
+  let leyendo = false;
+  async function spActualizar() {
+    if (leyendo || sincronizando || document.hidden || !navigator.onLine) return;
+    leyendo = true;
+    try { await cargarRegistro(); pintarCambios(); }
+    catch (_) { /* sin señal o la sesión venció: se reintenta en la próxima vuelta */ }
+    finally { leyendo = false; }
   }
 
   // ---------- OneDrive simulado (solo modo prueba) ----------
@@ -407,9 +509,7 @@
     fbEscucha = fbDb.collection('registros').onSnapshot(snap => {
       registro = aplicarPendientes({ despachos: snap.docs.map(x => x.data()) });
       cache.guardar('registro.' + usuarioDatos(), registro);
-      refrescar();
-      const lista = document.getElementById('lista');
-      if (st.view === 'registros' && lista && document.activeElement?.id !== 'q') lista.innerHTML = listaRegistro();
+      pintarCambios();
     }, e => {
       console.error('Firestore', e);
       // Si aún no hay identificación (p. ej. se abrió sin señal), se vuelve a escuchar cuando la haya.
@@ -458,9 +558,15 @@
 
   // ---------- Registro (despachos y traslados) ----------
   let registro = { despachos: [] };
-  // En modo prueba Ventas y Soporte comparten los datos del dispositivo; con Microsoft, cada cuenta usa su OneDrive.
-  // En Firebase todo está en la nube compartida, así que lo local también se comparte entre cuentas del dispositivo.
-  const usuarioDatos = () => (DEMO || FB ? 'compartido' : cuenta.username);
+  // En modo prueba Ventas y Soporte comparten los datos del dispositivo; con OneDrive, cada cuenta usa el suyo.
+  // En SharePoint y Firebase todo está en la nube compartida, así que lo local también se comparte entre cuentas del dispositivo.
+  const usuarioDatos = () => (DEMO || FB || SP ? 'compartido' : cuenta.username);
+  // Lo que llegó de otro dispositivo o cuenta se muestra sin recargar (sin pisar lo que se está escribiendo).
+  function pintarCambios() {
+    refrescar();
+    const lista = document.getElementById('lista');
+    if (st.view === 'registros' && lista && document.activeElement?.id !== 'q') lista.innerHTML = listaRegistro();
+  }
   const clavePend = () => 'pendientes.' + usuarioDatos();
 
   // Une cambios de datos/inspección sobre un registro (la inspección se mezcla punto por punto).
@@ -481,8 +587,8 @@
 
   async function leerRegistro() {
     let data;
-    if (FB) {
-      data = await fbLeerRegistros();
+    if (FB || SP) {
+      data = FB ? await fbLeerRegistros() : await spLeerRegistros();
       data.despachos.forEach(x => { if (!x.tipo) x.tipo = 'despacho'; });
       return data;
     }
@@ -510,10 +616,11 @@
   async function cambiarRegistro(cambio) {
     const pendAntes = JSON.stringify(cache.leer(clavePend()) || {});
     const base = await leerRegistro();
-    const antes = FB ? JSON.parse(JSON.stringify(base)) : null;
+    const antes = FB || SP ? JSON.parse(JSON.stringify(base)) : null;
     const data = aplicarPendientes(base);
     cambio(data);
     if (FB) fbGuardarCambios(antes, data);
+    else if (SP) await spGuardarCambios(antes, data);
     else await graph(REGISTRO + ':/content', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data, null, 1) });
     if (JSON.stringify(cache.leer(clavePend()) || {}) === pendAntes) cache.quitar(clavePend());
     registro = aplicarPendientes(data);
@@ -557,6 +664,7 @@
     return idCarpetas[ruta];
   }
   async function carpetaTipo(tipo) {
+    if (!RAIZ) return asegurarCarpeta(T(tipo).carpeta);
     const raiz = await asegurarCarpeta(RAIZ);
     return asegurarCarpeta(`${RAIZ}/${T(tipo).carpeta}`, raiz);
   }
@@ -655,8 +763,8 @@
           if (x) guardarDetalles(x.id, { fotos: (x.fotos || 0) + 1 });
         } catch (e) {
           if (e instanceof SinSenal) { sinSenal = true; reintento = setTimeout(procesarCola, 20000); break; }
-          if (e.status === 404) { it.error = 'La carpeta ya no existe en OneDrive.'; await idb.poner(it); }
-          else { reintento = setTimeout(procesarCola, 15000); break; } // OneDrive ocupado (429/5xx): reintenta luego
+          if (e.status === 404) { it.error = `La carpeta ya no existe en ${NUBE}.`; await idb.poner(it); }
+          else { reintento = setTimeout(procesarCola, 15000); break; } // la nube está ocupada (429/5xx): reintenta luego
         } finally {
           subiendoId = null;
           await refrescarCola();
@@ -729,7 +837,7 @@
     const b = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.86));
     return { data: new Uint8Array(await b.arrayBuffer()), w: c.width, h: c.height };
   }
-  // Foto en tamaño completo (no la miniatura): de la nube, de OneDrive o del dispositivo, según el modo.
+  // Foto en tamaño completo (no la miniatura): de Firebase, de SharePoint/OneDrive o del dispositivo, según el modo.
   async function fotoNube(id) {
     if (DEMO) { const b = await idb.leer('demofoto.' + id); if (!b) throw new Error('sin archivo'); return b; }
     if (FB) return fbFotoGrande(id);
@@ -929,7 +1037,7 @@
       <div class="mark bad">${ic('lock')}</div>
       <div><h1>Esta app es solo para Ventas</h1>
       <p class="muted" style="margin-top:8px">La cuenta <code>${esc(cuenta.username)}</code> no tiene acceso. Si necesitas entrar, contacta al Área de Innovación y Mantenimiento.</p></div>
-      <button class="btn block" data-act="salir">Usar otra cuenta</button>
+      <button class="btn block" data-act="${ELEGIR_CUENTA ? 'salir' : 'otracuenta'}">Usar otra cuenta</button>
     </section></main>`;
   }
   function vFalla() {
@@ -970,12 +1078,13 @@
         <span class="meta">${sub} <span class="pill ${d.estado}">${d.estado === 'proceso' ? 'En proceso' : 'Cerrado'}</span></span>
       </button>
       <button class="icon-btn" data-act="informe" data-id="${esc(d.id)}" aria-label="Descargar informe en Word" title="Informe Word">${st.generando === d.id ? ic('spin') : ic('doc')}</button>
-      ${SIN_ONEDRIVE ? '' : `<a class="icon-btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener" aria-label="Abrir carpeta en OneDrive" title="Abrir carpeta">${ic('folder')}</a>`}
+      ${SIN_ONEDRIVE ? '' : `<a class="icon-btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener" aria-label="Abrir carpeta en ${NUBE}" title="Abrir carpeta">${ic('folder')}</a>`}
     </div>`;
   }
   function notas() {
     const pend = enCola().length;
-    return `${st.rol === 'soporte' && !SIN_ONEDRIVE ? `<div class="note info">${ic('info')}<span>Estás en modo soporte. Tus pruebas se guardan en tu propio OneDrive, no en el de Ventas.</span></div>` : ''}
+    return `${st.rol === 'soporte' && !SIN_ONEDRIVE ? `<div class="note info">${ic('info')}<span>${SP ? 'Estás en modo soporte. Lo que hagas aquí lo ve Ventas: para pruebas, pon "(borrar)" en el nombre.' : 'Estás en modo soporte. Tus pruebas se guardan en tu propio OneDrive, no en el de Ventas.'}</span></div>` : ''}
+      ${st.migrando ? `<div class="note">${ic('spin')}<span>${esc(st.migrando)}</span></div>` : ''}
       ${pend ? `<div class="note ${sinSenal ? 'bad' : ''}">${ic(sinSenal ? 'nosignal' : 'cloud')}<span>${pend} ${pend === 1 ? 'foto' : 'fotos'} ${sinSenal ? 'esperando señal para subir.' : 'subiendo…'}</span></div>` : ''}`;
   }
 
@@ -1124,8 +1233,8 @@
   }
   function vistaRuta(final, quitados) {
     return `<span class="eyebrow">Se creará la carpeta</span>
-      <div class="crumbs">${ic('folder')}OneDrive <span>›</span> ${esc(RAIZ)} <span>›</span> ${esc(T(st.tipo).carpeta)} <span>›</span> <b>${final ? esc(final) : '…'}</b></div>
-      ${quitados.length ? `<p class="warn">${ic('alert')}<span>OneDrive no acepta ${quitados.map(c => `<code class="mono">${esc(c)}</code>`).join(' ')} en nombres de carpeta; se cambiaron por guiones.</span></p>` : ''}`;
+      <div class="crumbs">${ic('folder')}${esc(RUTA_NUBE)} <span>›</span> ${esc(T(st.tipo).carpeta)} <span>›</span> <b>${final ? esc(final) : '…'}</b></div>
+      ${quitados.length ? `<p class="warn">${ic('alert')}<span>${NUBE} no acepta ${quitados.map(c => `<code class="mono">${esc(c)}</code>`).join(' ')} en nombres de carpeta; se cambiaron por guiones.</span></p>` : ''}`;
   }
   function vNuevo() {
     const t = T(st.tipo);
@@ -1157,7 +1266,7 @@
     let cls = '', icon = 'cloud', linea, ayuda;
     if (vista.cargando && !total) { linea = 'Revisando fotos…'; ayuda = ''; }
     else if (!total) { linea = 'Aún no hay fotos subidas'; ayuda = ''; }
-    else if (!esperando) { cls = 'ok'; icon = 'cloudok'; linea = `${total} ${total === 1 ? 'foto subida' : 'fotos subidas'}`; ayuda = DEMO ? 'Están guardadas en la carpeta.' : FB ? 'Ya están en la nube.' : 'Ya están en OneDrive.'; }
+    else if (!esperando) { cls = 'ok'; icon = 'cloudok'; linea = `${total} ${total === 1 ? 'foto subida' : 'fotos subidas'}`; ayuda = DEMO ? 'Están guardadas en la carpeta.' : FB ? 'Ya están en la nube.' : `Ya están en ${NUBE}.`; }
     else if (sinSenal) { cls = 'off'; icon = 'nosignal'; linea = `${subidas} de ${total} fotos subidas`; ayuda = `<b>Sin señal.</b> ${esperando} ${esperando === 1 ? 'foto espera' : 'fotos esperan'} en el celular y se ${esperando === 1 ? 'subirá' : 'subirán'} solas cuando vuelva la conexión.`; }
     else { cls = 'going'; icon = 'cloud'; linea = `${subidas} de ${total} fotos subidas`; ayuda = 'Subiendo en segundo plano. No cierres la app hasta que terminen.'; }
     return `${borradores ? `<div class="stage">
@@ -1276,7 +1385,7 @@
         <h1>${esc(d.nombre)}</h1>
         <div class="d-meta"><span class="pill ${d.estado}">${abierto ? 'En proceso' : 'Cerrado'}</span><span>${fmtDate(d.fecha)}${d.cliente ? ' · ' + esc(d.cliente) : ''}</span></div>
         ${traza(d)}
-        ${SIN_ONEDRIVE ? '' : `<div class="crumbs">${ic('folder')}OneDrive › ${esc(RAIZ)} › ${esc(t.carpeta)} › <b>${esc(d.carpeta)}</b></div>`}
+        ${SIN_ONEDRIVE ? '' : `<div class="crumbs">${ic('folder')}${esc(RUTA_NUBE)} › ${esc(t.carpeta)} › <b>${esc(d.carpeta)}</b></div>`}
       </div>
       ${abierto ? `
         <div class="row">
@@ -1300,7 +1409,7 @@
       <div class="row">
         <button class="btn primary" data-act="informe" data-id="${esc(d.id)}" ${st.generando ? 'disabled' : ''}>${st.generando === d.id ? ic('spin') + 'Preparando informe…' : ic('doc') + 'Descargar informe (Word)'}</button>
         <button class="btn" data-act="zip" ${st.generandoZip || !tiles.length ? 'disabled' : ''}>${st.generandoZip === d.id ? ic('spin') + 'Preparando fotos…' : ic('image') + 'Descargar fotos (.zip)'}</button>
-        ${SIN_ONEDRIVE ? '' : `<a class="btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener">${ic('ext')}Abrir carpeta en OneDrive</a>`}
+        ${SIN_ONEDRIVE ? '' : `<a class="btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener">${ic('ext')}Abrir carpeta en ${NUBE}</a>`}
       </div>
       ${abierto ? `<button class="btn block" data-act="cerrar" ${tiles.length && !borradores && !st.ocupado ? '' : 'disabled'}>${ic('check')}Cerrar ${t.uno}</button>
         ${borradores ? `<p class="help">Para cerrar, primero sube las ${borradores} ${borradores === 1 ? 'foto' : 'fotos'} que están en el celular o elimínalas.</p>` : ''}` : ''}
@@ -1330,7 +1439,7 @@
       <span class="eyebrow">Eliminar ${t.uno}</span>
       <h2 style="font-size:20px">¿Eliminar "${esc(d.nombre)}"?</h2>
       <p class="help">Se borran el registro${nFotos ? `, sus datos y ${nFotos === 1 ? 'su foto' : `sus ${nFotos} fotos`}` : ' y sus datos'}.
-        ${SIN_ONEDRIVE ? 'Esta acción no se puede deshacer.' : 'La carpeta queda en la papelera de OneDrive por si fue un error.'}</p>
+        ${SIN_ONEDRIVE ? 'Esta acción no se puede deshacer.' : `La carpeta queda en la papelera de ${NUBE} por si fue un error.`}</p>
       <button class="btn block primary peligro" data-act="eliminar" ${st.ocupado ? 'disabled' : ''}>${st.ocupado ? ic('spin') + 'Eliminando…' : ic('trash') + 'Sí, eliminar'}</button>
       <button class="btn block" data-act="noeliminar">Cancelar</button>
     </div></div>`;
@@ -1508,6 +1617,9 @@
       <p><b>${esc(cuenta.name || '')}</b><br><span class="muted">${esc(cuenta.username)}</span></p>
       <p class="help">La sesión queda abierta en este dispositivo aunque cierres la app.</p>
       ${pend ? `<div class="note">${ic('alert')}<span>Hay ${pend} ${pend === 1 ? 'foto' : 'fotos'} sin subir. Súbelas y espera a que terminen antes de cerrar sesión.</span></div>` : ''}
+      ${SP && CFG.firebase && st.rol === 'soporte' ? `<span class="eyebrow">App anterior</span>
+      <p class="help">Copia a SharePoint los despachos y traslados que se hicieron con la app anterior (Firebase), con todas sus fotos. Firebase no se toca y lo ya copiado no se duplica.</p>
+      <button class="btn block" data-act="migrarfb" ${st.migrando ? 'disabled' : ''}>${st.migrando ? ic('spin') + 'Copiando…' : ic('cloud') + 'Traer registros de Firebase'}</button>` : ''}
       <button class="btn block danger" data-act="salir" ${pend ? 'disabled' : ''}>${ic('logout')}Cerrar sesión</button>
       <button class="btn block" data-act="cerrarmenu">Cancelar</button>
     </div></div>`;
@@ -1667,6 +1779,8 @@
         else salir();
         break;
       case 'migrar': if (!st.ocupado) subirDatosLocales(); break;
+      case 'migrarfb': if (!st.migrando) { st.menu = false; migrarFirebase(); } break;
+      case 'otracuenta': ingresar(); break;
       case 'olvide': {
         const correo = (document.getElementById('l-correo')?.value || '').trim();
         if (!correo) { st.errorLogin = 'Escribe tu correo y vuelve a tocar "¿Olvidaste tu contraseña?".'; render(); break; }
@@ -1710,7 +1824,7 @@
           st.abiertos = {};
           vista = { id: nd.id, nube: [], cargando: false, error: null };
           ir('despacho');
-          toast(SIN_ONEDRIVE ? `${T(st.tipo).Uno} creado` : 'Carpeta creada en OneDrive');
+          toast(SIN_ONEDRIVE ? `${T(st.tipo).Uno} creado` : `Carpeta creada en ${NUBE}`);
         } catch (err) {
           st.ocupado = false; render();
           toast(errorAMensaje(err, 'crear la carpeta'));
@@ -1819,7 +1933,7 @@
           d.fotos = n;
           if ((d.informeFotos || []).includes(b.dataset.n)) guardarDetalles(d.id, { informeFotos: d.informeFotos.filter(x => x !== b.dataset.n) });
           cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); if (x) x.fotos = n; }).catch(() => {});
-          toast(SIN_ONEDRIVE ? 'Foto eliminada' : 'Foto eliminada. Si fue un error, está en la papelera de OneDrive.');
+          toast(SIN_ONEDRIVE ? 'Foto eliminada' : `Foto eliminada. Si fue un error, está en la papelera de ${NUBE}.`);
         } catch (err) {
           toast(err.status === 404 ? 'Esa foto ya no estaba en la carpeta.' : errorAMensaje(err, 'eliminar la foto'));
           if (err.status === 404) vista.nube = vista.nube.filter(f => f.id !== id);
@@ -1997,6 +2111,53 @@
     }
     st.ocupado = false; render();
   }
+  // Registros de la app anterior (Firebase) → SharePoint: carpeta con las fotos en tamaño completo y fila en la lista.
+  // Solo lee Firebase. Se puede repetir: lo ya copiado se reconoce por "origen", y si una copia quedó a medias
+  // se reutiliza su carpeta y se reemplazan las fotos.
+  async function migrarFirebase() {
+    st.migrando = 'Conectando con Firebase…'; render();
+    let hechos = 0, fotos = 0;
+    try {
+      if (!window.firebase) for (const src of FB_SDK) await cargarScript(src);
+      const fb = firebase.apps.length ? firebase.app() : firebase.initializeApp(CFG.firebase);
+      if (!fb.auth().currentUser) await fb.auth().signInAnonymously();
+      const db = fb.firestore();
+      const regs = (await db.collection('registros').get()).docs.map(x => x.data());
+      await cargarRegistro();
+      const copiados = new Set(registro.despachos.map(d => d.origen).filter(Boolean));
+      const faltan = regs.filter(x => x.id && !copiados.has('firebase:' + x.id));
+      for (const x of faltan) {
+        st.migrando = `Copiando ${hechos + 1} de ${faltan.length}: ${x.nombre || 'sin nombre'}`; refrescar();
+        const tipo = x.tipo || 'despacho';
+        const padre = await carpetaTipo(tipo);
+        const { nombre } = nombreCarpeta(x.nombre || 'Sin nombre', new Date(x.fecha || x.creado || Date.now()));
+        let f;
+        try { f = await graph(`/me/drive/items/${padre}/children`, { method: 'POST', json: { name: nombre, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' } }); }
+        catch (e) { if (e.status !== 409) throw e; f = await graph(`/me/drive/items/${padre}:/${encodeURIComponent(nombre)}`); }
+        const snap = await db.collection('fotos').where('registroId', '==', x.id).get();
+        const usados = new Set();
+        for (const doc of snap.docs) {
+          const foto = doc.data();
+          let archivo = foto.nombre || `Foto_${doc.id}.jpg`;
+          if (usados.has(archivo)) archivo = archivo.replace(/(\.\w+)?$/, `_${doc.id}$1`);
+          usados.add(archivo);
+          await graph(`/me/drive/items/${f.id}:/${encodeURIComponent(archivo)}:/content?@microsoft.graph.conflictBehavior=replace`,
+            { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: blobDe(foto.data) });
+          fotos++;
+        }
+        const d = { ...x, tipo, id: f.id, carpeta: f.name, webUrl: f.webUrl, fotos: snap.size, origen: 'firebase:' + x.id };
+        await cambiarRegistro(r => { r.despachos = r.despachos.filter(y => y.id !== d.id); r.despachos.push(d); });
+        hechos++;
+      }
+      toast(faltan.length ? `Listo: ${hechos} ${hechos === 1 ? 'registro' : 'registros'} y ${fotos} fotos copiados a SharePoint.` : 'Ya estaba todo copiado.');
+    } catch (e) {
+      console.error(e);
+      toast(errorAMensaje(e, 'copiar los registros de Firebase') + (hechos ? ` Se copiaron ${hechos}; vuelve a tocar el botón para seguir.` : ''));
+    }
+    st.migrando = null;
+    refrescar(); render();
+  }
+
   document.addEventListener('submit', async e => {
     if (e.target.id !== 'f-login') return;
     e.preventDefault();
@@ -2052,8 +2213,20 @@
     await refrescarCola();
     ir('areas');
     try { await cargarRegistro(); refrescar(); }
-    catch (e) { if (!(e instanceof SinSenal)) { console.error(e); toast('No se pudo actualizar el registro desde OneDrive.'); } }
+    catch (e) {
+      if (!(e instanceof SinSenal)) {
+        console.error(e);
+        if (e.permiso) { ir('falla', { error: 'Microsoft no dio el permiso para usar SharePoint. Si es la primera vez, un administrador debe aprobar los permisos de la app. Avisa a soporte.' }); return; }
+        if (e.config) { ir('falla', { error: `${e.message}. Avisa a soporte.` }); return; }
+        toast(e.status === 403 ? `Tu cuenta no tiene permiso en el sitio de ${NUBE}. Avisa a soporte.` : `No se pudo actualizar el registro desde ${NUBE}.`);
+      }
+    }
     procesarCola();
+    if (SP) {
+      setInterval(spActualizar, 30000);
+      document.addEventListener('visibilitychange', spActualizar);
+      window.addEventListener('online', spActualizar);
+    }
   }
 
   if (!window.HUB_DEMO && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

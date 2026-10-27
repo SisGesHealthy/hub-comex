@@ -1,5 +1,19 @@
 # Hub Comex: contexto del proyecto
 
+> **2026-10-27: traspaso a sistemasdegestion@ (vigente, manda sobre lo de abajo).**
+> - **Repo y Pages:** `SisGesHealthy/hub-comex` → https://sisgeshealthy.github.io/hub-comex/. La versión del pasante en argalvez-oss queda solo hasta el cambio.
+> - **Modo:** `config.js` → `modo: 'sharepoint'`.
+>   - Login MSAL con el registro "Hub Comex" (`3abc78ee-…`), Graph delegado `User.Read` + `Sites.ReadWrite.All`.
+>   - Fotos en la biblioteca `EspacioColaborativo/HubComex`; registros en la lista `HubComexRegistros` (columna `Datos` = registro completo).
+>   - `graph()` cambia `/me/drive` por `/drives/{id}`, así se reutiliza todo el flujo de OneDrive.
+>   - Sin tiempo real: se vuelve a leer la lista cada 30 s.
+> - **Sin Firebase ni otras cuentas extra.** Firebase (proyecto del pasante) se usa solo para "Traer registros de Firebase" (menú de Soporte, solo lectura, idempotente por `origen`).
+> - **Soporte:** notificaciones@ y sistemasdegestion@.
+> - **Pruebas:**
+>   - `referencias/prueba-sp.html` simula MSAL y Graph en el navegador (no se publica).
+>   - Probado el 2026-10-27: migración real (1 registro, 14 fotos, orden del informe intacto, Word y zip OK), crear, subir foto y eliminar.
+> - **Pendiente:** aprobación de Azure (`SOLICITUD_AZURE.md`), crear la biblioteca y la lista en SharePoint, permisos de Ventas en el sitio, crear el repo y publicar, migrar de verdad y avisar a Ventas el cambio de dirección.
+
 > Este archivo resume todo el proyecto para que otro chat de Claude pueda seguir el trabajo.
 > Si usas **Claude Code**, deja este archivo en la carpeta raíz del proyecto con el nombre `CLAUDE.md`; Claude lo lee solo.
 > Si usas **claude.ai (chat)**, adjúntalo al inicio de la conversación o súbelo como conocimiento de un Proyecto.
