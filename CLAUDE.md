@@ -12,7 +12,11 @@
 > - **Pruebas:**
 >   - `referencias/prueba-sp.html` simula MSAL y Graph en el navegador (no se publica).
 >   - Probado el 2026-10-27: migración real (1 registro, 14 fotos, orden del informe intacto, Word y zip OK), crear, subir foto y eliminar.
-> - **Pendiente:** aprobación de Azure (`SOLICITUD_AZURE.md`), crear la biblioteca y la lista en SharePoint, permisos de Ventas en el sitio, crear el repo y publicar, migrar de verdad y avisar a Ventas el cambio de dirección.
+> - **SharePoint listo (2026-10-27):**
+>   - Biblioteca "Hub Comex" (`HubComex`, id `06ac53ed-…`) y lista "Hub Comex - Registros" (`HubComexRegistros`, id `d9255162-…`), las dos con versiones.
+>   - La lista tiene 16 columnas con los nombres internos que usa la app; Title se muestra como "Nombre".
+>   - ventas-sales@ y notificaciones@ ya pueden editar (son integrantes del sitio).
+> - **Pendiente:** aprobación de Azure (`SOLICITUD_AZURE.md`), luego migrar de verdad ("Traer registros de Firebase") y avisar a Ventas del cambio de dirección.
 
 > Este archivo resume todo el proyecto para que otro chat de Claude pueda seguir el trabajo.
 > Si usas **Claude Code**, deja este archivo en la carpeta raíz del proyecto con el nombre `CLAUDE.md`; Claude lo lee solo.
