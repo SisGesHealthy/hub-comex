@@ -1,0 +1,72 @@
+# Hub Comex
+
+App del área de Ventas para registrar **despachos y traslados**: fotos, datos del informe, inspección previa e informe en Word.
+
+## Dónde se guardan los datos (hoy: Firebase, provisional)
+- `config.js` → `modo: 'firebase'`. Proyecto Firebase **hub-comex** (plan Spark, gratis).
+- Firestore: `registros` (un documento por despacho/traslado), `fotos` (foto para el informe, ≤ 900 KB) y `miniaturas` (para la pantalla). Todo se ve igual en cualquier dispositivo, navegador y cuenta, en tiempo real.
+- Ingreso: se elige Ventas o Soporte (sin contraseñas). La app se identifica ante Firebase de forma **anónima** (Authentication → Anónimo habilitado) y las reglas de Firestore solo aceptan esas conexiones (`request.auth != null`).
+- Sin señal: Firestore guarda en el dispositivo y sube al volver la conexión.
+- Trazabilidad en cada registro: `creado/creadoPor`, `cerrado/cerradoPor`, `reabierto/reabiertoPor`, `modificado/modificadoPor`.
+- Límite gratis: 1 GB (≈ 5.000 fotos). Plan a futuro: pasar a SharePoint.
+
+- **Ingreso:** cuenta Microsoft de la empresa. Solo entran los correos listados en `config.js`. La sesión queda guardada en el dispositivo. Mientras `modo: 'prueba'`, se elige Ventas o Soporte y todo se guarda solo en el dispositivo.
+- **Fotos:** se guardan en el OneDrive de quien ingresa, en `Hub Comex/Despachos/AAAA-MM-DD - <nombre>/Foto_001.jpg` (o `Hub Comex/Traslados/...`).
+- **Organización:** al ingresar se elige el área (*Despachos* o *Traslados*). Cada área tiene su inicio (nuevo registro y los que están en proceso) y su página de *Registros* (buscar, filtrar y descargar el informe).
+- **Fotos en dos pasos:** las fotos aceptadas quedan en el celular ("sin subir") y se pueden eliminar; con el botón *Subir* pasan a OneDrive (si no hay señal, esperan y se suben solas). No se puede cerrar un registro con fotos sin subir.
+- **Listas desplegables:** `catalogos.js`, generado desde el Excel *LISTA DESPLEGABLE APP COMEX.xlsx* (clientes, productos por cliente con su código, destinos, lugares de carga y navieras). Al elegir el cliente, el producto solo deja elegir entre los de ese cliente y su código se llena solo. Las demás listas tienen la opción "Otro (escribir)".
+  Para actualizar las listas: cambiar el Excel y ejecutar `python herramientas/excel-a-catalogos.py "LISTA DESPLEGABLE APP COMEX.xlsx" catalogos.js`; luego subir `catalogos.js` y subir la versión en `sw.js`.
+- **Horas:** la hora de inicio y de fin no las pone la app; en el informe quedan vacías para llenarlas a mano. La fecha sí se guarda sola.
+- **Datos en la app:** todos los campos del informe, en 7 secciones plegables con su avance: Datos generales, Transporte y contenedor, Inspección previa, Estiba/sellos/cierre, Detalle de carga (producto filtrado por cliente y código automático), Observaciones y Personal a cargo.
+- **Al cerrar:** si falta algo, sale un aviso con lo que falta; se puede cerrar igual.
+- **Informe Word:** botón *Descargar informe (Word)* en cada registro, con el logo (`icons/logo-hf.png`) y las fotos marcadas con estrella ya colocadas. El formato está en `informe.js`; si cambia el formato, solo se edita ese archivo.
+- **Sin señal:** las fotos aceptadas quedan guardadas en el celular y se suben solas cuando vuelve la conexión, siempre que la app esté abierta.
+- **Registro:** el archivo `_registro-hub-comex.json`, dentro de `OneDrive/Hub Comex`. **No borrarlo ni moverlo.**
+- **Inicio de sesión (temporal):** usa el registro de Azure de *Hub Recepción*, que ya tiene aprobado `Sites.ReadWrite.All`. Cuando un administrador apruebe el registro propio *Hub Comex*, cambiar `clientId` y `permisos` en `config.js` (ahí están las instrucciones).
+
+Archivos: `index.html`, `styles.css`, `app.js` (toda la lógica), `informe.js` (formato del informe Word), `config.js` (datos a completar), `sw.js` (permite instalar la app y abrirla sin señal), `manifest.webmanifest`, `icons/`.
+
+---
+
+## 1. Configuración en Azure (una sola vez)
+
+1. Entrar a <https://portal.azure.com> con la cuenta de la empresa → **Microsoft Entra ID** → **Registros de aplicaciones** → **Nuevo registro**.
+2. Completar:
+   - **Nombre:** `Hub Comex`
+   - **Tipos de cuenta admitidos:** *Solo las cuentas de este directorio organizativo*
+   - **URI de redirección:** tipo **Aplicación de página única (SPA)** → `https://sisgeshealthy.github.io/hub-comex/`
+3. Tocar **Registrar**. En la pantalla *Información general* copiar:
+   - **Id. de aplicación (cliente)** → `clientId` en `config.js`
+   - **Id. de directorio (inquilino)** → `tenantId` en `config.js`
+4. **Autenticación** → en *Aplicación de página única* agregar también `http://localhost:5500/` (para probar en la computadora) → **Guardar**.
+5. **Permisos de API** → **Agregar un permiso** → **Microsoft Graph** → **Permisos delegados** → marcar `Files.ReadWrite` (además de `User.Read`, que ya viene) → **Agregar permisos**.
+
+La primera vez que ventas ingrese, Microsoft le pedirá aceptar esos permisos. Si en cambio aparece *"Se necesita la aprobación del administrador"*, la empresa no deja que los usuarios los acepten. En ese caso, un administrador de Microsoft 365 debe tocar **Conceder consentimiento de administrador** en esa misma pantalla.
+
+## 2. Completar `config.js`
+
+- `clientId` y `tenantId`: los del paso anterior.
+- `correosPermitidos`: el correo de Ventas con rol `'ventas'` y el de soporte con rol `'soporte'`, en minúsculas.
+
+## 3. Publicar en GitHub Pages
+
+1. En la organización **sisgeshealthy** crear el repositorio `hub-comex`.
+2. Subir todos los archivos de esta carpeta a la rama `main`.
+3. En el repositorio: **Settings → Pages → Source: Deploy from a branch → main / (root)** → **Save**.
+4. En uno o dos minutos la app queda en `https://sisgeshealthy.github.io/hub-comex/`.
+
+**Al publicar cambios:** subir el número de `VERSION` en `sw.js` (por ejemplo `hc-v1` → `hc-v2`). Así los celulares que ya tienen la app instalada descargan la versión nueva.
+
+## 4. Probar en la computadora
+
+Desde esta carpeta:
+
+```bash
+npx serve -l 5500
+```
+
+Abrir `http://localhost:5500/`. Tiene que ser `localhost` y no `127.0.0.1`, porque así está registrado en Azure.
+
+## 5. Instalar en el celular
+
+Abrir el enlace en **Chrome** → menú **⋮** → **Instalar aplicación** (o *Agregar a la pantalla principal*). Son los mismos pasos que en el manual de HUB Recepciones.
