@@ -3,9 +3,12 @@
 App del área de Ventas para registrar **despachos y traslados**: fotos, datos del informe, inspección previa e informe en Word.
 
 - **Dirección:** https://sisgeshealthy.github.io/hub-comex/ (cuenta de GitHub **SisGesHealthy**, la de sistemasdegestion@).
-- **Ingreso:** cuenta Microsoft de la empresa. Solo entran los correos de `config.js` → `correosPermitidos`:
-  - `ventas-sales@`: Ventas.
-  - `notificaciones@` y `sistemasdegestion@`: Soporte.
+- **Ingreso:** cuenta Microsoft de la empresa.
+- **Accesos:** se editan en la app (menú de la cuenta → **Accesos**). Solo lo ve el administrador fijo (`config.js` → `administrador`, sistemasdegestion@).
+  - Por cada cuenta se elige: **Despachos** y/o **Traslados**; **Editar** (sin esto, solo ve y descarga); **Eliminar** (registros y fotos); **Soporte** (todo, más traer registros de Firebase).
+  - Se guarda en la biblioteca → `_config/accesos.json`. Esa carpeta es de **solo lectura para los integrantes del sitio**, así que solo el administrador y los propietarios pueden cambiarla.
+  - Cada cuenta toma los cambios al abrir la app.
+  - Mientras no se guarde desde la app, valen las cuentas de `config.js` → `correosPermitidos` (ventas-sales@ = Ventas, notificaciones@ = Soporte).
 - **Dónde se guarda** (`config.js` → `modo: 'sharepoint'`), en el sitio **EspacioColaborativo**:
   - **Fotos:** biblioteca *Hub Comex* (`/sites/EspacioColaborativo/HubComex`) → `Despachos/` o `Traslados/` → `AAAA-MM-DD - <nombre>/Foto_001.jpg`. Cualquiera con acceso al sitio las abre desde SharePoint.
   - **Registros:** lista *HubComexRegistros*, una fila por despacho o traslado.

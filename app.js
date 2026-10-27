@@ -1010,6 +1010,101 @@
   const faltantes = d => SECCIONES.map(s => ({ s, a: avance(d, s) })).filter(x => x.a[1] && x.a[0] < x.a[1]);
   const delMes = d => { const f = new Date(d.fecha), h = new Date(); return f.getMonth() === h.getMonth() && f.getFullYear() === h.getFullYear(); };
 
+  // ---------- Accesos: quién entra y qué puede hacer cada cuenta ----------
+  // La lista se edita en la app (menú → Accesos, solo el administrador) y se guarda en la biblioteca:
+  // _config/accesos.json. Mientras no se guarde desde la app valen los correos de config.js.
+  // Cada cuenta toma sus permisos al abrir la app.
+  const ADMIN = (CFG.administrador || '').toLowerCase();
+  const PERMISOS = [
+    ['despachos', 'Despachos', 'Ve el área de despachos'],
+    ['traslados', 'Traslados', 'Ve el área de traslados'],
+    ['editar', 'Editar', 'Crea registros, toma fotos, llena datos, cierra y reabre. Sin esto, solo ve y descarga'],
+    ['eliminar', 'Eliminar', 'Borra registros y fotos'],
+    ['soporte', 'Soporte', 'Todo, incluido traer registros de la app anterior']
+  ];
+  const TODO = { despachos: true, traslados: true, editar: true, eliminar: true, soporte: true };
+  const NORMAL = { despachos: true, traslados: true, editar: true, eliminar: true, soporte: false };
+  // Acciones (data-act) que exige cada permiso.
+  const ACCIONES = {
+    editar: ['abrirsel', 'elegir', 'ordenar', 'ordmover', 'nuevo', 'crear', 'insp', 'opcion', 'estrella', 'agregarprod', 'quitarprod',
+      'completar', 'camara', 'galeria', 'repetir', 'quitar', 'aceptar', 'subirfotos', 'descartar', 'cerrar', 'reabrir'],
+    eliminar: ['preeliminar', 'eliminar', 'preborrar', 'borrarfoto'],
+    soporte: ['migrarfb'],
+    admin: ['accesos', 'acctoggle', 'accquitar', 'accagregar', 'accguardar']
+  };
+  const CLAVE_ACCESOS = DEMO ? 'demo.accesos' : 'accesos';
+  const ARCHIVO_ACCESOS = '/me/drive/root:/_config/accesos.json';
+  const clavePerm = tipo => T(tipo).plural.toLowerCase(); // 'despachos' | 'traslados'
+  let accesos = null; // { cuentas: { correo: { despachos, traslados, editar, eliminar, soporte } }, modificado, modificadoPor }
+
+  function accesosIniciales() {
+    const cuentas = {};
+    Object.entries(CFG.correosPermitidos || {}).forEach(([c, rol]) => { cuentas[c.toLowerCase()] = rol === 'soporte' ? { ...TODO } : { ...NORMAL }; });
+    return { cuentas };
+  }
+  async function cargarAccesos() {
+    accesos = cache.leer(CLAVE_ACCESOS) || accesosIniciales();
+    if (DEMO || FB) return; // modo prueba: quedan en el dispositivo · Firebase: los de config.js
+    try {
+      const meta = await graph(ARCHIVO_ACCESOS);
+      let r;
+      try { r = await fetch(meta['@microsoft.graph.downloadUrl'], { cache: 'no-store' }); }
+      catch (_) { throw new SinSenal(); }
+      if (!r.ok) throw new Error('No se pudieron leer los accesos');
+      accesos = JSON.parse(await r.text());
+    } catch (e) {
+      if (e.status === 404) accesos = accesosIniciales(); // aún no se guardaron desde la app
+      else { if (!(e instanceof SinSenal)) console.warn('Accesos', e); return; } // sin señal: los últimos conocidos
+    }
+    cache.guardar(CLAVE_ACCESOS, accesos);
+  }
+  async function guardarAccesos(nuevo) {
+    nuevo.modificado = new Date().toISOString();
+    nuevo.modificadoPor = cuenta.username;
+    if (!DEMO) {
+      const carpeta = await asegurarCarpeta('_config');
+      await graph(`/me/drive/items/${carpeta}:/accesos.json:/content`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nuevo, null, 1) });
+    }
+    accesos = nuevo;
+    cache.guardar(CLAVE_ACCESOS, accesos);
+  }
+  function permisoDe(correo) {
+    const c = (correo || '').toLowerCase();
+    // El administrador siempre tiene todo (así nadie queda fuera de Accesos por error). En modo prueba, Soporte hace de administrador.
+    if (c && (c === ADMIN || (DEMO && c === DEMO_CUENTAS.soporte.username))) return { ...TODO, admin: true };
+    const p = accesos && accesos.cuentas && accesos.cuentas[c];
+    if (!p || !(p.despachos || p.traslados || p.soporte)) return null;
+    return p.soporte ? { ...TODO } : { ...p };
+  }
+  // Fija los permisos de la cuenta que ingresó. false = no tiene acceso.
+  function fijarPermisos() {
+    st.perm = permisoDe(cuenta.username);
+    st.rol = st.perm ? (st.perm.soporte ? 'soporte' : 'ventas') : null;
+    if (st.perm && !st.perm[clavePerm(st.tipo)]) st.tipo = st.perm.despachos ? 'despacho' : 'traslado';
+    return !!st.perm;
+  }
+  function puede(act, b) {
+    const p = st.perm;
+    if (!p) return true; // pantallas de ingreso
+    if (act === 'area') return !!p[clavePerm(b.dataset.t)];
+    for (const [k, lista] of Object.entries(ACCIONES)) if (lista.includes(act)) return !!p[k];
+    return true;
+  }
+  // Lo que la cuenta no puede usar no se muestra. Solo ver: lo elegido (listas, Sí/No, estrellas) queda a la vista pero sin tocar.
+  function aplicarPermisos() {
+    const p = st.perm;
+    if (!p || p.admin) return;
+    const visibles = ['abrirsel', 'opcion', 'insp', 'estrella'];
+    for (const [k, lista] of Object.entries(ACCIONES)) {
+      if (p[k]) continue;
+      lista.forEach(a => app.querySelectorAll(`[data-act="${a}"]`).forEach(x => {
+        if (k === 'editar' && visibles.includes(a)) x.disabled = true;
+        else x.style.display = 'none';
+      }));
+    }
+    if (!p.editar) app.querySelectorAll('input:not(#q):not(#desde):not(#hasta), textarea, select').forEach(x => { x.disabled = true; });
+  }
+
   // ---------- Pantallas ----------
   function vIngreso() {
     if (FB_CUENTAS) {
@@ -1043,7 +1138,7 @@
     return `<main class="wrap"><section class="login">
       <div class="mark bad">${ic('lock')}</div>
       <div><h1>Esta app es solo para Ventas</h1>
-      <p class="muted" style="margin-top:8px">La cuenta <code>${esc(cuenta.username)}</code> no tiene acceso. Si necesitas entrar, contacta al Área de Innovación y Mantenimiento.</p></div>
+      <p class="muted" style="margin-top:8px">La cuenta <code>${esc(cuenta.username)}</code> no tiene acceso. Si necesitas entrar, pídelo al Área de Innovación y Mantenimiento (${esc(ADMIN || 'Sistemas')}).</p></div>
       <button class="btn block" data-act="${ELEGIR_CUENTA ? 'salir' : 'otracuenta'}">Usar otra cuenta</button>
     </section></main>`;
   }
@@ -1092,6 +1187,7 @@
     const pend = enCola().length;
     return `${st.rol === 'soporte' && !SIN_ONEDRIVE ? `<div class="note info">${ic('info')}<span>${SP ? 'Estás en modo soporte. Lo que hagas aquí lo ve Ventas: para pruebas, pon "(borrar)" en el nombre.' : 'Estás en modo soporte. Tus pruebas se guardan en tu propio OneDrive, no en el de Ventas.'}</span></div>` : ''}
       ${st.migrando ? `<div class="note">${ic('spin')}<span>${esc(st.migrando)}</span></div>` : ''}
+      ${st.perm && !st.perm.editar ? `<div class="note info">${ic('info')}<span>Tu cuenta es solo para ver: puedes buscar, ver las fotos y descargar informes.</span></div>` : ''}
       ${pend ? `<div class="note ${sinSenal ? 'bad' : ''}">${ic(sinSenal ? 'nosignal' : 'cloud')}<span>${pend} ${pend === 1 ? 'foto' : 'fotos'} ${sinSenal ? 'esperando señal para subir.' : 'subiendo…'}</span></div>` : ''}`;
   }
 
@@ -1109,13 +1205,13 @@
       </button>`;
     };
     return `<main class="wrap areas-wrap">
-      <div class="areas-head"><h1>${saludo()}, ${nombre}</h1><p>¿Qué vas a registrar hoy?</p></div>
+      <div class="areas-head"><h1>${saludo()}, ${nombre}</h1><p>${st.perm && !st.perm.editar ? '¿Qué quieres revisar hoy?' : '¿Qué vas a registrar hoy?'}</p></div>
       ${notas()}
       ${st.migrar ? `<div class="note">${ic('cloud')}<span>Hay <b>${st.migrar} ${st.migrar === 1 ? 'registro guardado' : 'registros guardados'} solo en este dispositivo</b>, de antes de conectar la nube.
         <button class="link" data-act="migrar" ${st.ocupado ? 'disabled' : ''}>${st.ocupado ? 'Subiendo…' : 'Subirlos a la nube'}</button></span></div>` : ''}
       <div class="areas">
-        ${area('despacho', 'truck', 'Exportación de producto · fotos e informe')}
-        ${area('traslado', 'swap', 'Traslado de producto · fotos e informe')}
+        ${st.perm && !st.perm.despachos ? '' : area('despacho', 'truck', 'Exportación de producto · fotos e informe')}
+        ${st.perm && !st.perm.traslados ? '' : area('traslado', 'swap', 'Traslado de producto · fotos e informe')}
       </div>
     </main>`;
   }
@@ -1135,7 +1231,7 @@
       <section class="list">
         <div class="sec-h"><h2>Últimos cerrados</h2>${lista.length ? `<button class="link" data-act="registros">Ver registros</button>` : ''}</div>
         ${recientes.length ? recientes.map(tarjeta).join('')
-          : `<div class="empty">${lista.length ? `Los ${t.plural.toLowerCase()} cerrados aparecerán aquí.` : `Aún no hay ${t.plural.toLowerCase()}. Toca <b>Nuevo ${t.uno}</b> para crear el primero.`}</div>`}
+          : `<div class="empty">${lista.length ? `Los ${t.plural.toLowerCase()} cerrados aparecerán aquí.` : `Aún no hay ${t.plural.toLowerCase()}.${st.perm && !st.perm.editar ? '' : ` Toca <b>Nuevo ${t.uno}</b> para crear el primero.`}`}</div>`}
       </section>
     </main>`;
   }
@@ -1426,7 +1522,8 @@
 
   // Trazabilidad: quién creó, cerró, reabrió o modificó por última vez (las horas quedan guardadas en la nube).
   function traza(d) {
-    const quien = c => (rolDe(c) === 'soporte' ? 'Soporte' : rolDe(c) === 'ventas' ? 'Ventas' : c || '');
+    // Soporte · Ventas (la cuenta del cargo) · el resto, por la primera parte de su correo.
+    const quien = c => (rolDe(c) === 'soporte' ? 'Soporte' : /^ventas/i.test(c || '') ? 'Ventas' : (c || '').split('@')[0]);
     const partes = [
       d.creadoPor && `Creado por ${quien(d.creadoPor)}`,
       d.estado === 'cerrado' && d.cerradoPor && `cerrado por ${quien(d.cerradoPor)}`,
@@ -1624,12 +1721,44 @@
       <p><b>${esc(cuenta.name || '')}</b><br><span class="muted">${esc(cuenta.username)}</span></p>
       <p class="help">La sesión queda abierta en este dispositivo aunque cierres la app.</p>
       ${pend ? `<div class="note">${ic('alert')}<span>Hay ${pend} ${pend === 1 ? 'foto' : 'fotos'} sin subir. Súbelas y espera a que terminen antes de cerrar sesión.</span></div>` : ''}
-      ${SP && CFG.firebase && st.rol === 'soporte' ? `<span class="eyebrow">App anterior</span>
+      ${st.perm && st.perm.admin ? `<button class="btn block" data-act="accesos">${ic('lock')}Accesos: quién entra y qué puede hacer</button>` : ''}
+      ${SP && CFG.firebase && st.perm && st.perm.soporte ? `<span class="eyebrow">App anterior</span>
       <p class="help">Copia a SharePoint los despachos y traslados que se hicieron con la app anterior (Firebase), con todas sus fotos. Firebase no se toca y lo ya copiado no se duplica.</p>
       <button class="btn block" data-act="migrarfb" ${st.migrando ? 'disabled' : ''}>${st.migrando ? ic('spin') + 'Copiando…' : ic('cloud') + 'Traer registros de Firebase'}</button>` : ''}
       <button class="btn block danger" data-act="salir" ${pend ? 'disabled' : ''}>${ic('logout')}Cerrar sesión</button>
       <button class="btn block" data-act="cerrarmenu">Cancelar</button>
     </div></div>`;
+  }
+
+  // Accesos (solo el administrador): una tarjeta por cuenta con sus permisos. Se guarda todo junto con "Guardar".
+  function vAccesos() {
+    const ed = st.accEdit;
+    const cambios = JSON.stringify(ed.cuentas) !== JSON.stringify((accesos || {}).cuentas || {});
+    const filas = Object.keys(ed.cuentas).filter(c => c !== ADMIN).sort().map(c => {
+      const p = ed.cuentas[c];
+      return `<div class="card acc">
+        <div class="acc-top"><code class="mono">${esc(c)}</code>
+          <button class="icon-btn" data-act="accquitar" data-c="${esc(c)}" aria-label="Quitar ${esc(c)}" title="Quitar el acceso">${ic('trash')}</button></div>
+        <div class="acc-chips">${PERMISOS.map(([k, l, ayuda]) => `<button class="chip" data-act="acctoggle" data-c="${esc(c)}" data-k="${k}" title="${esc(ayuda)}"
+          aria-pressed="${!!(p[k] || p.soporte)}" ${p.soporte && k !== 'soporte' ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+        ${p.despachos || p.traslados || p.soporte ? '' : `<p class="warn">${ic('alert')}<span>Sin Despachos ni Traslados: esta cuenta no podrá entrar.</span></p>`}
+      </div>`;
+    }).join('');
+    return `<main class="wrap">
+      <div class="areas-head"><h1>Accesos</h1><p>Quién entra a Hub Comex y qué puede hacer. Cada cuenta toma los cambios la próxima vez que abre la app.</p></div>
+      <div class="note info">${ic('info')}<span><b>${esc(ADMIN || cuenta.username)}</b> es el administrador: siempre puede hacer todo y editar esta lista.</span></div>
+      <details class="acc-ayuda"><summary>Qué permite cada opción</summary>
+        <ul>${PERMISOS.map(([, l, ayuda]) => `<li><b>${l}:</b> ${esc(ayuda)}.</li>`).join('')}</ul></details>
+      <div class="list">${filas || '<p class="muted">No hay otras cuentas con acceso.</p>'}</div>
+      <div class="field"><label for="acc-nuevo">Agregar una cuenta</label>
+        <div class="acc-add"><input class="input" id="acc-nuevo" type="email" inputmode="email" autocomplete="off" placeholder="correo@healthyfood.com.ec" value="${esc(st.accNuevo || '')}">
+        <button class="btn" data-act="accagregar">${ic('plus')}Agregar</button></div></div>
+      ${accesos && accesos.modificadoPor ? `<p class="help">Último cambio: ${esc(accesos.modificadoPor)}, ${fmtDate(accesos.modificado)}.</p>` : `<p class="help">Aún no se ha guardado desde aquí: valen las cuentas iniciales de la app.</p>`}
+      <div class="acc-acciones">
+        <button class="btn primary big block" data-act="accguardar" ${st.ocupado || (!cambios && accesos && accesos.modificadoPor) ? 'disabled' : ''}>${st.ocupado ? ic('spin') + 'Guardando…' : ic('check') + 'Guardar cambios'}</button>
+        <button class="btn block" data-act="areas">${cambios ? 'Descartar cambios' : 'Volver'}</button>
+      </div>
+    </main>`;
   }
 
   function render() {
@@ -1638,8 +1767,9 @@
     if (v === 'ingreso') { app.innerHTML = vIngreso(); return; }
     if (v === 'sinacceso') { app.innerHTML = vSinAcceso(); return; }
     if (v === 'falla') { app.innerHTML = vFalla(); return; }
-    const cuerpo = v === 'nuevo' ? vNuevo() : v === 'despacho' ? vDespacho() : v === 'registros' ? vRegistros() : v === 'modulo' ? vModulo() : vAreas();
-    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vVisor() + vOrdenar() + vMenu() + vAvisoCierre() + vEliminar();
+    const cuerpo = v === 'nuevo' ? vNuevo() : v === 'despacho' ? vDespacho() : v === 'registros' ? vRegistros() : v === 'modulo' ? vModulo() : v === 'accesos' ? vAccesos() : vAreas();
+    app.innerHTML = encabezado(v === 'registros' || v === 'areas' || v === 'accesos') + cuerpo + barra() + (st.revision ? vRevision() : '') + vVisor() + vOrdenar() + vMenu() + vAvisoCierre() + vEliminar();
+    aplicarPermisos();
   }
 
   // ---------- Vista de un registro ----------
@@ -1719,8 +1849,51 @@
     // Un clic fuera de la lista abierta la cierra.
     if (st.sel && !(b && ['abrirsel', 'elegir'].includes(b.dataset.act))) { st.sel = null; render(); if (!b) return; }
     if (!b) return;
+    if (!puede(b.dataset.act, b)) { toast('Tu cuenta no tiene permiso para esto. Pídelo a Sistemas.'); return; }
     const d = buscar(vista.id);
     switch (b.dataset.act) {
+      case 'accesos': {
+        st.menu = false;
+        await cargarAccesos().catch(() => {}); // lo último guardado, por si otro lo cambió
+        st.accEdit = JSON.parse(JSON.stringify(accesos || accesosIniciales()));
+        st.accNuevo = '';
+        ir('accesos');
+        window.scrollTo(0, 0);
+        break;
+      }
+      case 'acctoggle': {
+        const p = st.accEdit.cuentas[b.dataset.c];
+        if (!p) break;
+        p[b.dataset.k] = !(p[b.dataset.k] || (p.soporte && b.dataset.k !== 'soporte'));
+        if (b.dataset.k === 'soporte' && !p.soporte) Object.assign(p, NORMAL, { eliminar: p.eliminar }); // al quitar Soporte queda como cuenta normal
+        render();
+        break;
+      }
+      case 'accquitar': delete st.accEdit.cuentas[b.dataset.c]; render(); break;
+      case 'accagregar': {
+        const c = (st.accNuevo || '').trim().toLowerCase();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c)) { toast('Escribe un correo válido.'); break; }
+        if (c === ADMIN || st.accEdit.cuentas[c]) { toast('Esa cuenta ya está en la lista.'); break; }
+        st.accEdit.cuentas[c] = { despachos: true, traslados: true, editar: true, eliminar: false, soporte: false };
+        st.accNuevo = '';
+        render();
+        break;
+      }
+      case 'accguardar': {
+        if (st.ocupado) break;
+        st.ocupado = true; render();
+        try {
+          await guardarAccesos(JSON.parse(JSON.stringify(st.accEdit)));
+          st.ocupado = false; st.accEdit = null;
+          ir('areas');
+          toast('Accesos guardados. Cada cuenta los toma al abrir la app.');
+        } catch (err) {
+          console.error(err);
+          st.ocupado = false; render();
+          toast(errorAMensaje(err, 'guardar los accesos'));
+        }
+        break;
+      }
       case 'abrirsel': {
         st.sel = st.sel === b.dataset.id ? null : b.dataset.id;
         render();
@@ -2001,13 +2174,13 @@
     } else if (t.id === 'q' || t.id === 'desde' || t.id === 'hasta') {
       st[t.id] = t.value;
       document.getElementById('lista').innerHTML = listaRegistro();
-    }
+    } else if (t.id === 'acc-nuevo') st.accNuevo = t.value;
   });
   // Datos y observaciones del registro abierto: se guardan al salir del campo.
   document.addEventListener('change', e => {
     const t = e.target;
     const d = buscar(vista.id);
-    if (!d || st.view !== 'despacho') return;
+    if (!d || st.view !== 'despacho' || (st.perm && !st.perm.editar)) return;
     if (t.value === OTRO) return; // lo atiende el evento "input": cambia la lista por un campo para escribir
     if (t.id && t.id.startsWith('det-')) {
       const v = t.value.trim();
@@ -2039,6 +2212,7 @@
   document.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.id && e.target.id.startsWith('nuevo-')) document.getElementById('crear').click();
     if (e.key === 'Enter' && (e.target.id?.startsWith('det-') || e.target.dataset?.obs)) e.target.blur();
+    if (e.key === 'Enter' && e.target.id === 'acc-nuevo') document.querySelector('[data-act="accagregar"]')?.click();
     if (e.key === 'Escape' && (st.menu || st.sel || st.eliminar || st.visor || st.ordenar)) { st.menu = false; st.sel = null; st.eliminar = null; st.visor = null; st.ordenar = null; render(); }
     if (st.visor && e.key === 'ArrowLeft') verFoto(st.visor.i - 1);
     if (st.visor && e.key === 'ArrowRight') verFoto(st.visor.i + 1);
@@ -2051,7 +2225,8 @@
     if (!cuenta) { ir('ingreso'); return; }
     if (clave === 'otro') { ir('sinacceso'); return; }
     try { localStorage.setItem(SESION_DEMO, clave); } catch (_) {}
-    st.rol = clave;
+    await cargarAccesos();
+    if (!fijarPermisos()) { ir('sinacceso'); return; }
     if (FB) { // Firebase sin cuentas: se elige Ventas o Soporte, pero los datos van a la nube
       registro = aplicarPendientes(cache.leer('registro.' + usuarioDatos()) || { despachos: [] });
       await refrescarCola();
@@ -2068,15 +2243,12 @@
     procesarCola();
   }
 
-  const rolDe = correo => {
-    const permitidos = {};
-    Object.keys(CFG.correosPermitidos || {}).forEach(k => { permitidos[k.toLowerCase()] = CFG.correosPermitidos[k]; });
-    return permitidos[(correo || '').toLowerCase()] || null;
-  };
+  const rolDe = correo => { const p = permisoDe(correo); return p ? (p.soporte ? 'soporte' : 'ventas') : null; };
   async function entrarFirebase(u) {
-    st.rol = rolDe(u.email);
-    cuenta = { username: (u.email || '').toLowerCase(), name: st.rol === 'soporte' ? 'Soporte' : st.rol === 'ventas' ? 'Ventas' : u.email };
-    if (!st.rol) { ir('sinacceso'); return; }
+    await cargarAccesos();
+    const rol = rolDe(u.email);
+    cuenta = { username: (u.email || '').toLowerCase(), name: rol === 'soporte' ? 'Soporte' : rol === 'ventas' ? 'Ventas' : u.email };
+    if (!fijarPermisos()) { ir('sinacceso'); return; }
     registro = aplicarPendientes(cache.leer('registro.' + usuarioDatos()) || { despachos: [] });
     await refrescarCola();
     ir('areas');
@@ -2213,8 +2385,8 @@
     catch (e) { console.error(e); ir('falla', { error: 'No se pudo iniciar sesión con Microsoft. Intenta de nuevo.' }); return; }
     if (!cuenta) { ir('ingreso'); return; }
 
-    st.rol = rolDe(cuenta.username);
-    if (!st.rol) { ir('sinacceso'); return; }
+    await cargarAccesos();
+    if (!fijarPermisos()) { ir('sinacceso'); return; }
 
     registro = aplicarPendientes(cache.leer('registro.' + usuarioDatos()) || { despachos: [] });
     await refrescarCola();

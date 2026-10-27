@@ -46,12 +46,15 @@ window.HUB_CONFIG = {
   // ya puede ver en SharePoint. Modo 'microsoft' (OneDrive): ['User.Read', 'Files.ReadWrite'].
   permisos: ['https://marcalman.sharepoint.com/AllSites.Write'],
 
-  // Únicos correos que pueden entrar, en minúsculas, y su rol.
-  // "ventas": uso normal. "soporte": puede hacer todo y además traer los registros de la app anterior.
+  // Administrador fijo: siempre puede hacer todo y es el único que edita los accesos (menú → Accesos).
+  administrador: 'sistemasdegestion@healthyfood.com.ec',
+
+  // Cuentas iniciales y su rol. Solo valen hasta que el administrador guarde los accesos desde la app
+  // (quedan en SharePoint: biblioteca Hub Comex → _config/accesos.json); desde ahí manda esa lista.
+  // "ventas": Despachos, Traslados, editar y eliminar. "soporte": todo, y además traer registros de la app anterior.
   correosPermitidos: {
     'ventas-sales@healthyfood.com.ec': 'ventas',
-    'notificaciones@healthyfood.com.ec': 'soporte',
-    'sistemasdegestion@healthyfood.com.ec': 'soporte'
+    'notificaciones@healthyfood.com.ec': 'soporte'
   },
 
   // Listas desplegables: se cargan desde catalogos.js (generado del Excel "LISTA DESPLEGABLE APP COMEX.xlsx"

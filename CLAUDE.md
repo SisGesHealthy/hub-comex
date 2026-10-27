@@ -11,7 +11,10 @@
 >   - `graph()` cambia `/me/drive` por `/drives/{id}`, así se reutiliza todo el flujo de OneDrive.
 >   - Sin tiempo real: se vuelve a leer la lista cada 30 s.
 > - **Sin Firebase ni otras cuentas extra.** Firebase (proyecto del pasante) se usa solo para "Traer registros de Firebase" (menú de Soporte, solo lectura, idempotente por `origen`).
-> - **Soporte:** notificaciones@ y sistemasdegestion@.
+> - **Accesos (2026-10-27):** pantalla en la app, solo para `administrador` (sistemasdegestion@).
+>   - Permisos por cuenta: despachos, traslados, editar, eliminar, soporte. Archivo `HubComex/_config/accesos.json`, con permisos propios: Integrantes = Leer.
+>   - `puede()` bloquea cada data-act y `aplicarPermisos()` oculta o desactiva lo que no se puede usar.
+>   - Es control de la app, no del servidor: con permiso Editar en el sitio, alguien podría tocar la lista o la biblioteca directo en SharePoint.
 > - **Pruebas:**
 >   - `referencias/prueba-sp.html` simula MSAL y Graph en el navegador (no se publica).
 >   - Probado el 2026-10-27: migración real (1 registro, 14 fotos, orden del informe intacto, Word y zip OK), crear, subir foto y eliminar.
