@@ -4,7 +4,9 @@ App del área de Ventas para registrar **despachos y traslados**: fotos, datos d
 
 - **Dirección:** https://sisgeshealthy.github.io/hub-comex/ (cuenta de GitHub **SisGesHealthy**, la de sistemasdegestion@).
 - **Ingreso:** cuenta Microsoft de la empresa.
-- **Accesos:** se editan en la app (menú de la cuenta → **Accesos**). Solo lo ve el administrador fijo (`config.js` → `administrador`, sistemasdegestion@).
+- **Configuración** (menú de la cuenta → **Configuración: listas y accesos**):
+  - **Personal a cargo:** listas de Calidad (Jefe de Calidad), Sellos y Bodega (los tres campos), iguales en Despachos y Traslados. Se pueden agregar, quitar y ordenar nombres. Queda en `_config/listas.json`; los valores iniciales están en `config.js` → `listasPersonal`.
+- **Accesos:** también en Configuración. Solo lo ve el administrador fijo (`config.js` → `administrador`, sistemasdegestion@).
   - Por cada cuenta se elige: **Despachos** y/o **Traslados**; **Editar** (sin esto, solo ve y descarga); **Eliminar** (registros y fotos); **Soporte** (todo, más traer registros de Firebase).
   - Se guarda en la biblioteca → `_config/accesos.json`. Esa carpeta es de **solo lectura para los integrantes del sitio**, así que solo el administrador y los propietarios pueden cambiarla.
   - Cada cuenta toma los cambios al abrir la app.

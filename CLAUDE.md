@@ -11,6 +11,9 @@
 >   - `graph()` cambia `/me/drive` por `/drives/{id}`, así se reutiliza todo el flujo de OneDrive.
 >   - Sin tiempo real: se vuelve a leer la lista cada 30 s.
 > - **Sin Firebase ni otras cuentas extra.** Firebase (proyecto del pasante) se usa solo para "Traer registros de Firebase" (menú de Soporte, solo lectura, idempotente por `origen`).
+> - **Listas de personal (2026-10-27):** Calidad, Sellos y Bodega se editan en Configuración y quedan en `_config/listas.json`.
+>   - Los campos jefeCalidad, respSellos y bodega1-3 usan `{ lista: 'calidad' | 'sellos' | 'bodega' }`.
+>   - Sin historial: quien sale de la lista no vuelve a aparecer. Se mantiene "Otro (escribir)".
 > - **Accesos (2026-10-27):** pantalla en la app, solo para `administrador` (sistemasdegestion@).
 >   - Permisos por cuenta: despachos, traslados, editar, eliminar, soporte. Archivo `HubComex/_config/accesos.json`, con permisos propios: Integrantes = Leer.
 >   - `puede()` bloquea cada data-act y `aplicarPermisos()` oculta o desactiva lo que no se puede usar.

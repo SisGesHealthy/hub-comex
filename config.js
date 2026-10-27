@@ -16,6 +16,14 @@ window.HUB_CONFIG = {
     lista: 'HubComexRegistros'       // …/sites/EspacioColaborativo/Lists/HubComexRegistros: una fila por registro
   },
 
+  // Listas de "Personal a cargo" (Despachos y Traslados). Son los valores iniciales: desde que el administrador
+  // guarda la Configuración en la app, mandan las de SharePoint (_config/listas.json).
+  listasPersonal: {
+    calidad: ['Maria Paula Granja', 'Samantha Fajardo', 'Edwin Tulcán'],
+    sellos: ['Bryan Ulco'],
+    bodega: ['Earvin Guambi', 'Byron Chasiguano', 'Juan Carlos Carrasco', 'Andrés Cedeño', 'Jhony Tuquerres']
+  },
+
   // Carpeta dentro de la biblioteca (u OneDrive) donde van "Despachos" y "Traslados". '' = en la raíz de la biblioteca.
   carpetaRaiz: '',
 

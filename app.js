@@ -89,11 +89,12 @@
     { id: 'carga', titulo: 'Detalle de carga' },
     { id: 'obs', titulo: 'Observaciones' },
     { id: 'personal', titulo: 'Personal a cargo', campos: [
-      ['jefeCalidad', 'Jefe de Calidad', 'Nombre'],
-      ['respSellos', 'Responsable de sellos', 'Nombre'],
-      ['bodega1', 'Bodega', 'Nombre'],
-      ['bodega2', 'Bodega (2)', 'Nombre', { opcional: true }],
-      ['bodega3', 'Bodega (3)', 'Nombre', { opcional: true }]
+      // Listas de personal: se editan en la app (Configuración → Listas desplegables).
+      ['jefeCalidad', 'Jefe de Calidad', 'Nombre', { lista: 'calidad' }],
+      ['respSellos', 'Responsable de sellos', 'Nombre', { lista: 'sellos' }],
+      ['bodega1', 'Bodega', 'Nombre', { lista: 'bodega' }],
+      ['bodega2', 'Bodega (2)', 'Nombre', { lista: 'bodega', opcional: true }],
+      ['bodega3', 'Bodega (3)', 'Nombre', { lista: 'bodega', opcional: true }]
     ] }
   ];
   const CAMPOS = SECCIONES.flatMap(s => s.campos || []);
@@ -1010,11 +1011,53 @@
   const faltantes = d => SECCIONES.map(s => ({ s, a: avance(d, s) })).filter(x => x.a[1] && x.a[0] < x.a[1]);
   const delMes = d => { const f = new Date(d.fecha), h = new Date(); return f.getMonth() === h.getMonth() && f.getFullYear() === h.getFullYear(); };
 
-  // ---------- Accesos: quién entra y qué puede hacer cada cuenta ----------
-  // La lista se edita en la app (menú → Accesos, solo el administrador) y se guarda en la biblioteca:
-  // _config/accesos.json. Mientras no se guarde desde la app valen los correos de config.js.
-  // Cada cuenta toma sus permisos al abrir la app.
+  // ---------- Configuración: accesos y listas de personal ----------
+  // Se edita en la app (menú → Configuración, solo el administrador) y se guarda en la biblioteca, carpeta _config
+  // (solo lectura para los integrantes del sitio): accesos.json y listas.json. Mientras no se guarde desde la app,
+  // valen los valores de config.js. Cada cuenta toma los cambios al abrir la app.
   const ADMIN = (CFG.administrador || '').toLowerCase();
+  // Listas de personal del informe (las mismas en Despachos y Traslados): clave → [título, campos que la usan].
+  const LISTAS = {
+    calidad: ['Calidad', 'Jefe de Calidad'],
+    sellos: ['Sellos', 'Responsable de sellos'],
+    bodega: ['Bodega', 'los tres campos de Bodega']
+  };
+  let listas = null; // { listas: { calidad: [...], sellos: [...], bodega: [...] }, modificado, modificadoPor }
+  const listasIniciales = () => ({ listas: Object.fromEntries(Object.keys(LISTAS).map(k => [k, ((CFG.listasPersonal || {})[k] || []).slice()])) });
+  const listasVigentes = () => (listas || listasIniciales()).listas || {};
+
+  // Archivo de _config: lo guardado en SharePoint, o null si aún no existe. Sin señal lanza SinSenal.
+  async function leerConfig(nombre) {
+    try {
+      const meta = await graph(`/me/drive/root:/_config/${nombre}`);
+      let r;
+      try { r = await fetch(meta['@microsoft.graph.downloadUrl'], { cache: 'no-store' }); }
+      catch (_) { throw new SinSenal(); }
+      if (!r.ok) throw new Error('No se pudo leer ' + nombre);
+      return JSON.parse(await r.text());
+    } catch (e) {
+      if (e.status === 404) return null;
+      throw e;
+    }
+  }
+  async function guardarConfig(nombre, obj) {
+    obj.modificado = new Date().toISOString();
+    obj.modificadoPor = cuenta.username;
+    if (DEMO) return;
+    const carpeta = await asegurarCarpeta('_config');
+    await graph(`/me/drive/items/${carpeta}:/${nombre}:/content`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj, null, 1) });
+  }
+  // Accesos y listas a la vez. Sin señal quedan los últimos conocidos (guardados en el dispositivo).
+  async function cargarConfiguracion() {
+    accesos = cache.leer(CLAVE_ACCESOS) || accesosIniciales();
+    listas = cache.leer(CLAVE_LISTAS) || listasIniciales();
+    if (DEMO || FB) return; // modo prueba: quedan en el dispositivo · Firebase: los de config.js
+    const [a, l] = await Promise.allSettled([leerConfig('accesos.json'), leerConfig('listas.json')]);
+    if (a.status === 'fulfilled') { accesos = a.value || accesosIniciales(); cache.guardar(CLAVE_ACCESOS, accesos); }
+    else if (!(a.reason instanceof SinSenal)) console.warn('Accesos', a.reason);
+    if (l.status === 'fulfilled') { listas = l.value || listasIniciales(); cache.guardar(CLAVE_LISTAS, listas); }
+    else if (!(l.reason instanceof SinSenal)) console.warn('Listas', l.reason);
+  }
   const PERMISOS = [
     ['despachos', 'Despachos', 'Ve el área de despachos'],
     ['traslados', 'Traslados', 'Ve el área de traslados'],
@@ -1030,10 +1073,10 @@
       'completar', 'camara', 'galeria', 'repetir', 'quitar', 'aceptar', 'subirfotos', 'descartar', 'cerrar', 'reabrir'],
     eliminar: ['preeliminar', 'eliminar', 'preborrar', 'borrarfoto'],
     soporte: ['migrarfb'],
-    admin: ['accesos', 'acctoggle', 'accquitar', 'accagregar', 'accguardar']
+    admin: ['accesos', 'acctoggle', 'accquitar', 'accagregar', 'accguardar', 'listquitar', 'listagregar', 'listmover']
   };
   const CLAVE_ACCESOS = DEMO ? 'demo.accesos' : 'accesos';
-  const ARCHIVO_ACCESOS = '/me/drive/root:/_config/accesos.json';
+  const CLAVE_LISTAS = DEMO ? 'demo.listas' : 'listas';
   const clavePerm = tipo => T(tipo).plural.toLowerCase(); // 'despachos' | 'traslados'
   let accesos = null; // { cuentas: { correo: { despachos, traslados, editar, eliminar, soporte } }, modificado, modificadoPor }
 
@@ -1041,32 +1084,6 @@
     const cuentas = {};
     Object.entries(CFG.correosPermitidos || {}).forEach(([c, rol]) => { cuentas[c.toLowerCase()] = rol === 'soporte' ? { ...TODO } : { ...NORMAL }; });
     return { cuentas };
-  }
-  async function cargarAccesos() {
-    accesos = cache.leer(CLAVE_ACCESOS) || accesosIniciales();
-    if (DEMO || FB) return; // modo prueba: quedan en el dispositivo · Firebase: los de config.js
-    try {
-      const meta = await graph(ARCHIVO_ACCESOS);
-      let r;
-      try { r = await fetch(meta['@microsoft.graph.downloadUrl'], { cache: 'no-store' }); }
-      catch (_) { throw new SinSenal(); }
-      if (!r.ok) throw new Error('No se pudieron leer los accesos');
-      accesos = JSON.parse(await r.text());
-    } catch (e) {
-      if (e.status === 404) accesos = accesosIniciales(); // aún no se guardaron desde la app
-      else { if (!(e instanceof SinSenal)) console.warn('Accesos', e); return; } // sin señal: los últimos conocidos
-    }
-    cache.guardar(CLAVE_ACCESOS, accesos);
-  }
-  async function guardarAccesos(nuevo) {
-    nuevo.modificado = new Date().toISOString();
-    nuevo.modificadoPor = cuenta.username;
-    if (!DEMO) {
-      const carpeta = await asegurarCarpeta('_config');
-      await graph(`/me/drive/items/${carpeta}:/accesos.json:/content`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nuevo, null, 1) });
-    }
-    accesos = nuevo;
-    cache.guardar(CLAVE_ACCESOS, accesos);
   }
   function permisoDe(correo) {
     const c = (correo || '').toLowerCase();
@@ -1285,6 +1302,8 @@
   const catalogo = () => window.HUB_CATALOGOS || CFG.catalogos || {};
   const OTRO = '__otro';
   function opcionesLista([k, , , o]) {
+    // Listas de personal: solo los nombres de Configuración (quien sale de la lista no vuelve a aparecer).
+    if (o && LISTAS[o.lista]) return listasVigentes()[o.lista] || [];
     const cat = (o && o.lista && catalogo()[o.lista]) || [];
     const hist = registro.despachos.map(d => (d[k] || '').trim()).filter(v => v && !cat.some(c => norm(c) === norm(v)));
     return [...new Set([...cat, ...hist.sort()])];
@@ -1721,7 +1740,7 @@
       <p><b>${esc(cuenta.name || '')}</b><br><span class="muted">${esc(cuenta.username)}</span></p>
       <p class="help">La sesión queda abierta en este dispositivo aunque cierres la app.</p>
       ${pend ? `<div class="note">${ic('alert')}<span>Hay ${pend} ${pend === 1 ? 'foto' : 'fotos'} sin subir. Súbelas y espera a que terminen antes de cerrar sesión.</span></div>` : ''}
-      ${st.perm && st.perm.admin ? `<button class="btn block" data-act="accesos">${ic('lock')}Accesos: quién entra y qué puede hacer</button>` : ''}
+      ${st.perm && st.perm.admin ? `<button class="btn block" data-act="accesos">${ic('lock')}Configuración: listas y accesos</button>` : ''}
       ${SP && CFG.firebase && st.perm && st.perm.soporte ? `<span class="eyebrow">App anterior</span>
       <p class="help">Copia a SharePoint los despachos y traslados que se hicieron con la app anterior (Firebase), con todas sus fotos. Firebase no se toca y lo ya copiado no se duplica.</p>
       <button class="btn block" data-act="migrarfb" ${st.migrando ? 'disabled' : ''}>${st.migrando ? ic('spin') + 'Copiando…' : ic('cloud') + 'Traer registros de Firebase'}</button>` : ''}
@@ -1730,11 +1749,30 @@
     </div></div>`;
   }
 
-  // Accesos (solo el administrador): una tarjeta por cuenta con sus permisos. Se guarda todo junto con "Guardar".
+  // Configuración (solo el administrador): listas de personal y accesos. Se guarda todo junto con "Guardar cambios".
+  const cambiosAccesos = () => JSON.stringify(st.accEdit.cuentas) !== JSON.stringify((accesos || {}).cuentas || {});
+  const cambiosListas = () => JSON.stringify(st.listEdit) !== JSON.stringify(listasVigentes());
+  const ultimoCambio = x => (x && x.modificadoPor ? `Último cambio: ${esc(x.modificadoPor)}, ${fmtDate(x.modificado)}.` : 'Aún no se ha guardado desde aquí: valen los valores iniciales de la app.');
+  function vListas() {
+    return Object.entries(LISTAS).map(([k, [titulo, campos]]) => {
+      const nombres = st.listEdit[k] || [];
+      return `<div class="card acc">
+        <div class="acc-top"><b>${titulo}</b><span class="help">${esc(campos)}</span></div>
+        ${nombres.length ? `<ol class="lst">${nombres.map((n, i) => `<li><span>${esc(n)}</span>
+          <button class="icon-btn mini" data-act="listmover" data-l="${k}" data-i="${i}" data-d="-1" ${i ? '' : 'disabled'} aria-label="Subir ${esc(n)}">${ic('up')}</button>
+          <button class="icon-btn mini" data-act="listmover" data-l="${k}" data-i="${i}" data-d="1" ${i < nombres.length - 1 ? '' : 'disabled'} aria-label="Bajar ${esc(n)}">${ic('down')}</button>
+          <button class="icon-btn mini" data-act="listquitar" data-l="${k}" data-i="${i}" aria-label="Quitar ${esc(n)}" title="Quitar">${ic('x')}</button></li>`).join('')}</ol>`
+          : `<p class="warn">${ic('alert')}<span>Lista vacía: el campo se llenará escribiendo.</span></p>`}
+        <div class="acc-add"><input class="input" id="list-${k}" data-lista="${k}" autocomplete="off" placeholder="Nombre y apellido" value="${esc(st.listNuevo[k] || '')}" maxlength="80">
+          <button class="btn" data-act="listagregar" data-l="${k}">${ic('plus')}Agregar</button></div>
+      </div>`;
+    }).join('');
+  }
   function vAccesos() {
     const ed = st.accEdit;
-    const cambios = JSON.stringify(ed.cuentas) !== JSON.stringify((accesos || {}).cuentas || {});
-    const filas = Object.keys(ed.cuentas).filter(c => c !== ADMIN).sort().map(c => {
+    const cambios = cambiosAccesos() || cambiosListas();
+    const nuncaGuardado = !(accesos && accesos.modificadoPor) || !(listas && listas.modificadoPor);
+    const filas =Object.keys(ed.cuentas).filter(c => c !== ADMIN).sort().map(c => {
       const p = ed.cuentas[c];
       return `<div class="card acc">
         <div class="acc-top"><code class="mono">${esc(c)}</code>
@@ -1745,17 +1783,21 @@
       </div>`;
     }).join('');
     return `<main class="wrap">
-      <div class="areas-head"><h1>Accesos</h1><p>Quién entra a Hub Comex y qué puede hacer. Cada cuenta toma los cambios la próxima vez que abre la app.</p></div>
-      <div class="note info">${ic('info')}<span><b>${esc(ADMIN || cuenta.username)}</b> es el administrador: siempre puede hacer todo y editar esta lista.</span></div>
+      <div class="areas-head"><h1>Configuración</h1><p>Listas desplegables y accesos. Cada cuenta toma los cambios la próxima vez que abre la app.</p></div>
+      <h2 class="cfg-h">Personal a cargo</h2>
+      <p class="help">Nombres que salen en las listas de "Personal a cargo", en Despachos y en Traslados. El orden de aquí es el de la lista. ${ultimoCambio(listas)}</p>
+      <div class="list">${vListas()}</div>
+      <h2 class="cfg-h">Accesos</h2>
+      <p class="help">${ultimoCambio(accesos)}</p>
+      <div class="note info">${ic('info')}<span><b>${esc(ADMIN || cuenta.username)}</b> es el administrador: siempre puede hacer todo y editar esta configuración.</span></div>
       <details class="acc-ayuda"><summary>Qué permite cada opción</summary>
         <ul>${PERMISOS.map(([, l, ayuda]) => `<li><b>${l}:</b> ${esc(ayuda)}.</li>`).join('')}</ul></details>
       <div class="list">${filas || '<p class="muted">No hay otras cuentas con acceso.</p>'}</div>
       <div class="field"><label for="acc-nuevo">Agregar una cuenta</label>
         <div class="acc-add"><input class="input" id="acc-nuevo" type="email" inputmode="email" autocomplete="off" placeholder="correo@healthyfood.com.ec" value="${esc(st.accNuevo || '')}">
         <button class="btn" data-act="accagregar">${ic('plus')}Agregar</button></div></div>
-      ${accesos && accesos.modificadoPor ? `<p class="help">Último cambio: ${esc(accesos.modificadoPor)}, ${fmtDate(accesos.modificado)}.</p>` : `<p class="help">Aún no se ha guardado desde aquí: valen las cuentas iniciales de la app.</p>`}
       <div class="acc-acciones">
-        <button class="btn primary big block" data-act="accguardar" ${st.ocupado || (!cambios && accesos && accesos.modificadoPor) ? 'disabled' : ''}>${st.ocupado ? ic('spin') + 'Guardando…' : ic('check') + 'Guardar cambios'}</button>
+        <button class="btn primary big block" data-act="accguardar" ${st.ocupado || (!cambios && !nuncaGuardado) ? 'disabled' : ''}>${st.ocupado ? ic('spin') + 'Guardando…' : ic('check') + 'Guardar cambios'}</button>
         <button class="btn block" data-act="areas">${cambios ? 'Descartar cambios' : 'Volver'}</button>
       </div>
     </main>`;
@@ -1854,11 +1896,31 @@
     switch (b.dataset.act) {
       case 'accesos': {
         st.menu = false;
-        await cargarAccesos().catch(() => {}); // lo último guardado, por si otro lo cambió
+        await cargarConfiguracion().catch(() => {}); // lo último guardado, por si otro lo cambió
         st.accEdit = JSON.parse(JSON.stringify(accesos || accesosIniciales()));
-        st.accNuevo = '';
+        st.listEdit = JSON.parse(JSON.stringify(listasVigentes()));
+        Object.keys(LISTAS).forEach(k => { st.listEdit[k] = st.listEdit[k] || []; });
+        st.accNuevo = ''; st.listNuevo = {};
         ir('accesos');
         window.scrollTo(0, 0);
+        break;
+      }
+      case 'listagregar': {
+        const k = b.dataset.l, n = (st.listNuevo[k] || '').trim().replace(/\s+/g, ' ');
+        if (n.length < 3) { toast('Escribe el nombre completo.'); break; }
+        if (st.listEdit[k].some(x => norm(x) === norm(n))) { toast('Ese nombre ya está en la lista.'); break; }
+        st.listEdit[k].push(n);
+        st.listNuevo[k] = '';
+        render();
+        setTimeout(() => document.getElementById('list-' + k)?.focus(), 30);
+        break;
+      }
+      case 'listquitar': st.listEdit[b.dataset.l].splice(+b.dataset.i, 1); render(); break;
+      case 'listmover': {
+        const l = st.listEdit[b.dataset.l], i = +b.dataset.i, j = i + +b.dataset.d;
+        if (j < 0 || j >= l.length) break;
+        [l[i], l[j]] = [l[j], l[i]];
+        render();
         break;
       }
       case 'acctoggle': {
@@ -1883,14 +1945,24 @@
         if (st.ocupado) break;
         st.ocupado = true; render();
         try {
-          await guardarAccesos(JSON.parse(JSON.stringify(st.accEdit)));
-          st.ocupado = false; st.accEdit = null;
+          // Solo se escribe lo que cambió (o lo que aún no existe en SharePoint).
+          if (cambiosListas() || !(listas && listas.modificadoPor)) {
+            const nuevo = { listas: JSON.parse(JSON.stringify(st.listEdit)) };
+            await guardarConfig('listas.json', nuevo);
+            listas = nuevo; cache.guardar(CLAVE_LISTAS, listas);
+          }
+          if (cambiosAccesos() || !(accesos && accesos.modificadoPor)) {
+            const nuevo = JSON.parse(JSON.stringify(st.accEdit));
+            await guardarConfig('accesos.json', nuevo);
+            accesos = nuevo; cache.guardar(CLAVE_ACCESOS, accesos);
+          }
+          st.ocupado = false; st.accEdit = null; st.listEdit = null;
           ir('areas');
-          toast('Accesos guardados. Cada cuenta los toma al abrir la app.');
+          toast('Configuración guardada. Cada cuenta la toma al abrir la app.');
         } catch (err) {
           console.error(err);
           st.ocupado = false; render();
-          toast(errorAMensaje(err, 'guardar los accesos'));
+          toast(errorAMensaje(err, 'guardar la configuración'));
         }
         break;
       }
@@ -2175,6 +2247,7 @@
       st[t.id] = t.value;
       document.getElementById('lista').innerHTML = listaRegistro();
     } else if (t.id === 'acc-nuevo') st.accNuevo = t.value;
+    else if (t.dataset && t.dataset.lista) st.listNuevo[t.dataset.lista] = t.value;
   });
   // Datos y observaciones del registro abierto: se guardan al salir del campo.
   document.addEventListener('change', e => {
@@ -2213,6 +2286,7 @@
     if (e.key === 'Enter' && e.target.id && e.target.id.startsWith('nuevo-')) document.getElementById('crear').click();
     if (e.key === 'Enter' && (e.target.id?.startsWith('det-') || e.target.dataset?.obs)) e.target.blur();
     if (e.key === 'Enter' && e.target.id === 'acc-nuevo') document.querySelector('[data-act="accagregar"]')?.click();
+    if (e.key === 'Enter' && e.target.dataset?.lista) document.querySelector(`[data-act="listagregar"][data-l="${e.target.dataset.lista}"]`)?.click();
     if (e.key === 'Escape' && (st.menu || st.sel || st.eliminar || st.visor || st.ordenar)) { st.menu = false; st.sel = null; st.eliminar = null; st.visor = null; st.ordenar = null; render(); }
     if (st.visor && e.key === 'ArrowLeft') verFoto(st.visor.i - 1);
     if (st.visor && e.key === 'ArrowRight') verFoto(st.visor.i + 1);
@@ -2225,7 +2299,7 @@
     if (!cuenta) { ir('ingreso'); return; }
     if (clave === 'otro') { ir('sinacceso'); return; }
     try { localStorage.setItem(SESION_DEMO, clave); } catch (_) {}
-    await cargarAccesos();
+    await cargarConfiguracion();
     if (!fijarPermisos()) { ir('sinacceso'); return; }
     if (FB) { // Firebase sin cuentas: se elige Ventas o Soporte, pero los datos van a la nube
       registro = aplicarPendientes(cache.leer('registro.' + usuarioDatos()) || { despachos: [] });
@@ -2245,7 +2319,7 @@
 
   const rolDe = correo => { const p = permisoDe(correo); return p ? (p.soporte ? 'soporte' : 'ventas') : null; };
   async function entrarFirebase(u) {
-    await cargarAccesos();
+    await cargarConfiguracion();
     const rol = rolDe(u.email);
     cuenta = { username: (u.email || '').toLowerCase(), name: rol === 'soporte' ? 'Soporte' : rol === 'ventas' ? 'Ventas' : u.email };
     if (!fijarPermisos()) { ir('sinacceso'); return; }
@@ -2385,7 +2459,7 @@
     catch (e) { console.error(e); ir('falla', { error: 'No se pudo iniciar sesión con Microsoft. Intenta de nuevo.' }); return; }
     if (!cuenta) { ir('ingreso'); return; }
 
-    await cargarAccesos();
+    await cargarConfiguracion();
     if (!fijarPermisos()) { ir('sinacceso'); return; }
 
     registro = aplicarPendientes(cache.leer('registro.' + usuarioDatos()) || { despachos: [] });
