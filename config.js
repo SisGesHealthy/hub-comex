@@ -41,9 +41,10 @@ window.HUB_CONFIG = {
   // Microsoft Entra ID → "Id. de directorio (inquilino)"
   tenantId: '8f9b210d-f5e5-404f-9fed-a0a827154105',
 
-  // Permisos delegados de Microsoft Graph que pide la app. Deben estar aprobados en el registro de clientId.
-  // Sites.ReadWrite.All delegado: la app solo llega a lo que la cuenta que ingresa ya puede ver en SharePoint.
-  permisos: ['User.Read', 'Sites.ReadWrite.All'],
+  // Permiso delegado que pide la app (aprobado por el administrador el 2026-10-27, igual que en Hub Recepción).
+  // Modo 'sharepoint': API de SharePoint con AllSites.Write; la app solo llega a lo que la cuenta que ingresa
+  // ya puede ver en SharePoint. Modo 'microsoft' (OneDrive): ['User.Read', 'Files.ReadWrite'].
+  permisos: ['https://marcalman.sharepoint.com/AllSites.Write'],
 
   // Únicos correos que pueden entrar, en minúsculas, y su rol.
   // "ventas": uso normal. "soporte": puede hacer todo y además traer los registros de la app anterior.

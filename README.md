@@ -26,12 +26,13 @@ Archivos:
 
 ## 1. Azure (una sola vez, lo hace un administrador)
 
-Ver **[SOLICITUD_AZURE.md](SOLICITUD_AZURE.md)**. En resumen, el registro *Hub Comex* (`3abc78ee-…`) necesita:
-- Propietario: sistemasdegestion@.
+**Aprobado el 2026-10-27** (detalle en [SOLICITUD_AZURE.md](SOLICITUD_AZURE.md)). El registro *Hub Comex* (`3abc78ee-…`) tiene:
 - URI SPA: `https://sisgeshealthy.github.io/hub-comex/` y `http://localhost:5500/`.
-- Graph delegado: `User.Read` + `Sites.ReadWrite.All`, con **consentimiento de administrador**.
+- Permiso delegado **SharePoint `AllSites.Write`** con consentimiento de administrador.
 
-## 2. SharePoint (una sola vez)
+La app usa la API de SharePoint (`https://marcalman.sharepoint.com/_api/v2.0`), que tiene la misma forma que Graph, así que no necesita Graph `Sites.*`.
+
+## 2. SharePoint (hecho el 2026-10-27)
 
 En EspacioColaborativo:
 - **Biblioteca** con dirección `HubComex` (título "Hub Comex").

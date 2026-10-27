@@ -3,7 +3,10 @@
 > **2026-10-27: traspaso a sistemasdegestion@ (vigente, manda sobre lo de abajo).**
 > - **Repo y Pages:** `SisGesHealthy/hub-comex` → https://sisgeshealthy.github.io/hub-comex/. La versión del pasante en argalvez-oss queda solo hasta el cambio.
 > - **Modo:** `config.js` → `modo: 'sharepoint'`.
->   - Login MSAL con el registro "Hub Comex" (`3abc78ee-…`), Graph delegado `User.Read` + `Sites.ReadWrite.All`.
+>   - Login MSAL con el registro "Hub Comex" (`3abc78ee-…`), permiso delegado **SharePoint AllSites.Write**, aprobado por el admin el 2026-10-27.
+>   - La app llama a la API de SharePoint `https://marcalman.sharepoint.com/_api/v2.0`, que tiene la forma de Graph. El admin NO dio Graph `Sites.*`; solo User.Read y Files.ReadWrite, que no se usan.
+>   - Diferencia con Graph: el enlace de descarga viene como `@content.downloadUrl`; `graph()` lo copia a `@microsoft.graph.downloadUrl`.
+>   - Las escrituras con la sesión del navegador (cookie) dan 403 "OAuth only flow": solo funcionan con el token de la app.
 >   - Fotos en la biblioteca `EspacioColaborativo/HubComex`; registros en la lista `HubComexRegistros` (columna `Datos` = registro completo).
 >   - `graph()` cambia `/me/drive` por `/drives/{id}`, así se reutiliza todo el flujo de OneDrive.
 >   - Sin tiempo real: se vuelve a leer la lista cada 30 s.
@@ -16,7 +19,8 @@
 >   - Biblioteca "Hub Comex" (`HubComex`, id `06ac53ed-…`) y lista "Hub Comex - Registros" (`HubComexRegistros`, id `d9255162-…`), las dos con versiones.
 >   - La lista tiene 16 columnas con los nombres internos que usa la app; Title se muestra como "Nombre".
 >   - ventas-sales@ y notificaciones@ ya pueden editar (son integrantes del sitio).
-> - **Pendiente:** aprobación de Azure (`SOLICITUD_AZURE.md`), luego migrar de verdad ("Traer registros de Firebase") y avisar a Ventas del cambio de dirección.
+> - **Probado con SharePoint real (2026-10-27, en localhost):** inicio de sesión, crear un registro, subir una foto, miniatura y foto grande, informe Word, fila en la lista y eliminar.
+> - **Pendiente:** migrar de verdad ("Traer registros de Firebase"), avisar a Ventas del cambio de dirección y que el pasante retire la app vieja y Firebase.
 
 > Este archivo resume todo el proyecto para que otro chat de Claude pueda seguir el trabajo.
 > Si usas **Claude Code**, deja este archivo en la carpeta raíz del proyecto con el nombre `CLAUDE.md`; Claude lo lee solo.

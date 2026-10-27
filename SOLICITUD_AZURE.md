@@ -1,61 +1,41 @@
-# Solicitud al administrador de Microsoft 365 / Azure: Hub Comex
+# Permisos de Azure de Hub Comex
 
-**Para:** administrador de Microsoft Entra ID (Azure) de Healthy Food
-**De:** sistemasdegestion@healthyfood.com.ec
-**App:** Hub Comex, la app de Ventas para despachos y traslados (fotos, datos e informe Word).
-**Dirección:** https://sisgeshealthy.github.io/hub-comex/
+**Estado (2026-10-27): APROBADO. No hace falta pedir nada más.**
 
-La app pasa a guardar todo en SharePoint (sitio **EspacioColaborativo**). Para eso necesita iniciar sesión con la cuenta de la empresa y un permiso de Microsoft Graph que solo un administrador puede aprobar, porque el tenant no deja que los usuarios lo acepten.
-
-## Registro de aplicación (ya existe)
-
-Microsoft Entra ID → **Registros de aplicaciones** → **Todas las aplicaciones** → **Hub Comex**
-
+Registro de aplicación **Hub Comex** en Microsoft Entra ID:
 - Id. de aplicación (cliente): `3abc78ee-335d-4231-a7d2-4dab471900a5`
 - Id. de directorio (inquilino): `8f9b210d-f5e5-404f-9fed-a0a827154105`
 
-## Lo que hay que hacer
+## Lo que aprobó el administrador
 
-1. **Propietarios** → *Agregar propietarios* → `sistemasdegestion@healthyfood.com.ec`.
-   Así la cuenta de la empresa administra el registro y no depende del pasante que lo creó.
+| API | Permiso | Tipo | Para qué |
+|---|---|---|---|
+| SharePoint | `AllSites.Write` | Delegado | **El que usa la app**: leer y escribir la biblioteca *Hub Comex* y la lista *HubComexRegistros* de EspacioColaborativo |
+| SharePoint | `AllSites.Read` | Delegado | No lo usa la app (se puede dejar) |
+| Microsoft Graph | `User.Read` | Delegado | Inicio de sesión |
+| Microsoft Graph | `Files.ReadWrite` | Delegado | No lo usa la app (era para la versión de OneDrive; se puede quitar) |
 
-2. **Autenticación** → plataforma **Aplicación de página única (SPA)** → URI de redirección (solo estas dos):
-   - `https://sisgeshealthy.github.io/hub-comex/`
-   - `http://localhost:5500/` (pruebas en la computadora)
+- Todos tienen el consentimiento de administrador concedido para Healthy Food.
+- La app usa la **API de SharePoint** (`https://marcalman.sharepoint.com/_api/v2.0`), que tiene la misma forma que Graph para archivos y listas. Por eso **no** hace falta Graph `Sites.ReadWrite.All`, que fue lo que se pidió primero.
+- Es un permiso **delegado**: la app actúa como la persona que inició sesión y solo llega a lo que esa cuenta ya puede ver en SharePoint.
 
-   Si aparece `https://argalvez-oss.github.io/hub-comex/` (la dirección vieja), se puede quitar.
-   No hace falta marcar "Tokens de acceso" ni "Tokens de id." (flujo implícito): la app usa PKCE.
+## URI de redirección (SPA)
 
-3. **Permisos de API** → *Agregar un permiso* → **Microsoft Graph** → **Permisos delegados**:
-   - `User.Read`, que ya viene.
-   - `Sites.ReadWrite.All`.
+Ya están registradas: probado el 2026-10-27, el inicio de sesión funciona en las dos.
+- `https://sisgeshealthy.github.io/hub-comex/`
+- `http://localhost:5500/`
 
-   Si está `Files.ReadWrite`, se puede quitar: ya no se usa.
+## Recomendado (opcional, para el administrador)
 
-4. En esa misma pantalla: **Conceder consentimiento de administrador para Healthy Food** → **Sí**.
-   Las dos filas deben quedar con el visto verde "Concedido para Healthy Food".
+- **Propietarios:** agregar `sistemasdegestion@healthyfood.com.ec`. Así la cuenta de la empresa administra el registro y no depende de quien lo creó.
+- **Aplicaciones empresariales → Hub Comex:**
+  - En Propiedades, **¿Se requiere asignación? = Sí**.
+  - En Usuarios y grupos, asignar a `ventas-sales@`, `notificaciones@` y `sistemasdegestion@`.
+  - La app ya filtra por correo; esto lo bloquea también en Microsoft.
+- **Quitar** Graph `Files.ReadWrite`: la app no lo usa.
 
-5. **Opcional (recomendado):** Entra ID → **Aplicaciones empresariales** → **Hub Comex**:
-   - En **Propiedades**, poner **¿Se requiere asignación?** = **Sí**.
-   - En **Usuarios y grupos**, asignar a `ventas-sales@`, `notificaciones@` y `sistemasdegestion@`.
+## Si algún día se crea un registro nuevo
 
-   Así nadie más puede iniciar sesión en la app. La app, además, solo deja entrar a esos tres correos.
-
-## Por qué ese permiso
-
-- Es **delegado**: la app actúa como la persona que inició sesión y solo llega a lo que esa cuenta ya puede ver en SharePoint. No es un permiso de aplicación sin usuario.
-- La app lee y escribe solo dos cosas en EspacioColaborativo:
-  - La biblioteca **Hub Comex**, con las fotos en carpetas.
-  - La lista **HubComexRegistros**, con una fila por despacho o traslado.
-- `User.Read` sirve para saber quién inició sesión.
-
-## Permisos en SharePoint (sitio EspacioColaborativo)
-
-`ventas-sales@healthyfood.com.ec` y `notificaciones@healthyfood.com.ec` necesitan **Editar** (miembros del sitio), o al menos Editar en la biblioteca *Hub Comex* y en la lista *HubComexRegistros*.
-
-## Si el registro "Hub Comex" no aparece o no se puede editar
-
-Crear uno nuevo:
-- **Nuevo registro** → nombre `Hub Comex` → *Solo las cuentas de este directorio organizativo*.
-- URI de redirección: SPA `https://sisgeshealthy.github.io/hub-comex/`.
-- Luego seguir los pasos 1 a 5 y enviar a sistemasdegestion@ el nuevo **Id. de aplicación (cliente)**.
+- SPA con las dos URI de arriba.
+- Permiso delegado **SharePoint → AllSites.Write**, con consentimiento de administrador.
+- Poner el nuevo id en `config.js` → `clientId`.

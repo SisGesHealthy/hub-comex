@@ -20,6 +20,9 @@
   const CFG = window.HUB_CONFIG || {};
   const SCOPES = CFG.permisos || ['User.Read', 'Files.ReadWrite'];
   const GRAPH = 'https://graph.microsoft.com/v1.0';
+  // SharePoint: su propia API v2.0, igual a la de Graph para archivos y listas, pero con el permiso delegado
+  // de SharePoint (AllSites.Write), que es el que aprobó el administrador. Graph Sites.* no está aprobado.
+  const API = CFG.modo === 'sharepoint' ? `https://${String((CFG.sharepoint || {}).sitio).split(':')[0]}/_api/v2.0` : GRAPH;
   const RAIZ = CFG.carpetaRaiz ?? 'Hub Comex'; // '' = Despachos y Traslados directo en la raíz de la biblioteca
   const REGISTRO = `/me/drive/root:/${encodeURIComponent(RAIZ)}/_registro-hub-comex.json`;
   const DOCX_URL = 'https://cdn.jsdelivr.net/npm/docx@9.5.1/dist/index.iife.js';
@@ -232,16 +235,20 @@
     let body = op.body;
     if (op.json) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(op.json); }
     let r;
-    try { r = await fetch(GRAPH + ruta, { method: op.method || 'GET', headers, body }); }
+    try { r = await fetch(API + ruta, { method: op.method || 'GET', headers, body }); }
     catch (_) { throw new SinSenal(); }
     if (!r.ok) {
-      const err = new Error(`Graph respondió ${r.status}`);
+      const err = new Error(`${SP ? 'SharePoint' : 'Graph'} respondió ${r.status}`);
       err.status = r.status;
       try { err.detalle = (await r.json()).error; } catch (_) {}
       throw err;
     }
     if (r.status === 204) return null;
-    return op.raw ? r : r.json();
+    if (op.raw) return r;
+    const j = await r.json();
+    // La API de SharePoint entrega el enlace de descarga con otro nombre que Graph.
+    if (j && j['@content.downloadUrl'] && !j['@microsoft.graph.downloadUrl']) j['@microsoft.graph.downloadUrl'] = j['@content.downloadUrl'];
+    return j;
   }
 
   // ---------- SharePoint: biblioteca de fotos + lista de registros ----------
@@ -291,7 +298,7 @@
         items.set(d.id, it.id);
         despachos.push(d);
       }
-      ruta = r['@odata.nextLink'] ? r['@odata.nextLink'].replace(GRAPH, '') : null;
+      ruta = r['@odata.nextLink'] ? r['@odata.nextLink'].replace(API, '') : null;
     }
     itemDe.clear();
     items.forEach((v, k) => itemDe.set(k, v));
